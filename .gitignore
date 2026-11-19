@@ -1,0 +1,6 @@
+node_modules/
+dist/
+bench/results/*.local.json
+recordings/*.jsonl
+*.log
+.DS_Store
