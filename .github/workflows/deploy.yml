@@ -41,7 +41,7 @@ jobs:
         run: npm run build
       - name: Check COOP/COEP headers are in the build
         if: steps.creds.outputs.ok == 'true'
-        run: grep -q "Cross-Origin-Embedder-Policy: require-corp" dist/_headers
+        run: grep -q "Cross-Origin-Embedder-Policy. require-corp" dist/_headers
       - name: Create the Pages project if it does not exist
         if: steps.creds.outputs.ok == 'true'
         run: npx --yes wrangler@4 pages project create "$PROJECT" --production-branch main || true
