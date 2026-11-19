@@ -1,4 +1,6 @@
 // Runs both feeds against the local emulator under Node and checks integrity counters.
+const HOST = process.env.VENUE_HOST ?? 'localhost:8787';
+const NEED_CANDLES = process.env.NO_CANDLES ? false : true;
 import WebSocket from 'ws';
 import { KrakenFeed } from '../src/feeds/kraken';
 import { BinanceFeed } from '../src/feeds/binance';
@@ -17,8 +19,8 @@ const sink: FeedSink = {
 };
 const sock = (u: string) => new WebSocket(u) as any;
 const fetchJson = async (u: string) => (await fetch(u)).json();
-const k = new KrakenFeed('ws://localhost:8787/kraken', ['BTC/USD', 'ETH/USD'], 1000, sink, sock);
-const b = new BinanceFeed('ws://localhost:8787/binance', 'http://localhost:8787/binance', ['BTCUSDT', 'ETHUSDT'], 1000, sink, sock, fetchJson);
+const k = new KrakenFeed('ws://' + HOST + '/kraken', ['BTC/USD', 'ETH/USD'], 1000, sink, sock);
+const b = new BinanceFeed('ws://' + HOST + '/binance', 'http://' + HOST + '/binance', ['BTCUSDT', 'ETHUSDT'], 1000, sink, sock, fetchJson);
 k.start(); b.start(); k.setOhlc('BTC/USD', 1); b.setKline('BTCUSDT', '1m');
 setTimeout(() => {
   console.log(statuses, 'candles', candles);
@@ -28,5 +30,5 @@ setTimeout(() => {
   console.log('binance', b.counters);
   const bk = b.books.get('BTCUSDT')!;
   console.log('binance best', bk.bids.bestTick * bk.inst.tickSize, bk.asks.bestTick * bk.inst.tickSize, bk.bids.n, bk.asks.n);
-  process.exit(bad === 0 && live && candles > 0 ? 0 : 1);
+  process.exit(bad === 0 && live && (candles > 0 || !NEED_CANDLES) ? 0 : 1);
 }, 5000);

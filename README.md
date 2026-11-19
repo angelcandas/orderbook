@@ -67,6 +67,28 @@ npm run emulator -- --rate 20000 --pairs 10   # level changes per second, per ve
 All histograms are fixed log-linear buckets in typed arrays, so measuring
 does not allocate.
 
+### Benchmarks
+
+```sh
+npm run build
+npm run bench                                  # 5 scenarios, 2k to 100k level changes/s
+npm run bench -- --headed --channel chrome     # on a machine with a real GPU
+```
+
+Results and how to read them: [docs/results.md](docs/results.md).
+
+### Record and replay real sessions
+
+```sh
+npm run record -- --minutes 10 --pairs 5 --out recordings/btc.jsonl   # needs exchange access
+npm run replay -- --file recordings/btc.jsonl --speed 10              # serves it on :8787
+npm run bench -- --replay recordings/btc.jsonl --speeds 1,10,100
+```
+
+The replay server rebuilds every book from the recording, so clients that join
+mid-stream get a snapshot with a valid Kraken checksum and the right Binance
+update id, then the recorded messages unchanged.
+
 ## Choices made so far
 
 The plan left six decisions open. These are the defaults taken to get going;
@@ -76,8 +98,8 @@ each is easy to change.
    framework free.
 2. Renderer: **WebGL2**, WebGPU later behind a flag.
 3. First release extras: the benchmark corpus and replay, receive-to-pixel
-   latency, the visible integrity panel and graceful overload. Latency and the
-   integrity panel are in; replay and overload are next.
+   latency, the visible integrity panel and graceful overload. All but
+   graceful overload are in.
 4. Reference devices: not chosen yet. CI numbers are relative only (no GPU).
 5. Results: a static page in this repository.
 6. Hosting: needs COOP/COEP headers (`public/_headers` works on Cloudflare
