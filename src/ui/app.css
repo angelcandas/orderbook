@@ -1,0 +1,21 @@
+:root {
+  --bg: #0d1117; --panel: #121821; --line: #1f2630; --text: #d6dde6; --dim: #7d8796;
+  --bid: #2ebd85; --ask: #e5534b; --accent: #6ea8fe; --warn: #d4a72c;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #ffffff; --panel: #f6f8fa; --line: #e4e8ee; --text: #1f2328; --dim: #59636e;
+    --bid: #1a7f37; --ask: #cf222e; --accent: #0969da; --warn: #9a6700; color-scheme: light;
+  }
+}
+:root[data-theme='light'] {
+  --bg: #ffffff; --panel: #f6f8fa; --line: #e4e8ee; --text: #1f2328; --dim: #59636e;
+  --bid: #1a7f37; --ask: #cf222e; --accent: #0969da; --warn: #9a6700; color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+#app { height: 100%; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
