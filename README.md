@@ -22,6 +22,15 @@ npm run emulator -- --rate 20000 --pairs 10   # level changes per second, per ve
 # then open http://localhost:5173/?src=local
 ```
 
+## Deploy
+
+Pushes to `main` build the app and deploy it to Cloudflare Pages (project
+`depthline`) with `.github/workflows/deploy.yml`. `public/_headers` sends
+`Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy`, which the app
+needs for SharedArrayBuffer; the workflow checks the live site returns them.
+It needs two repository secrets: `CLOUDFLARE_API_TOKEN` (Account, Cloudflare
+Pages: Edit) and `CLOUDFLARE_ACCOUNT_ID`. Without them the deploy is skipped.
+
 ## How it works
 
 ```
