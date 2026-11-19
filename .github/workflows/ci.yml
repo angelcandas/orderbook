@@ -21,3 +21,22 @@ jobs:
           npx tsx server/server.ts --rate 20000 --pairs 5 &
           sleep 3
           npm run test:feeds
+  bench:
+    # relative numbers only: GitHub runners have no GPU
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run bench -- --seconds 8 --warmup 3 --only "10k/s,100k/s" --out bench/results/ci.local.json
+      - run: cat bench/results/ci.local.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench
+          path: bench/results/ci.local.*
