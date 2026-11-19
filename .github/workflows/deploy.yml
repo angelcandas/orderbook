@@ -49,6 +49,7 @@ jobs:
         if: steps.creds.outputs.ok == 'true'
         id: deploy
         run: |
+          set -o pipefail
           npx --yes wrangler@4 pages deploy dist --project-name "$PROJECT" --branch main --commit-dirty=true | tee deploy.log
           url=$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' deploy.log | tail -1)
           echo "url=$url" >> "$GITHUB_OUTPUT"
