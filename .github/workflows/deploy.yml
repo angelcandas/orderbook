@@ -18,6 +18,7 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       PROJECT: depthline
+      CUSTOM_DOMAIN: orderbook.aiwilltrade.com
     steps:
       - name: Check Cloudflare secrets
         id: creds
@@ -54,6 +55,18 @@ jobs:
           url=$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' deploy.log | tail -1)
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed: $url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Attach the custom domain to the Pages project
+        if: steps.creds.outputs.ok == 'true'
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PROJECT/domains"
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          if curl -sS -H "$auth" "$api" | grep -q "\"name\":\"$CUSTOM_DOMAIN\""; then
+            echo "$CUSTOM_DOMAIN is already attached"
+          else
+            curl -sS --fail-with-body -X POST -H "$auth" -H "Content-Type: application/json" \
+              --data "{\"name\":\"$CUSTOM_DOMAIN\"}" "$api"
+          fi
+          curl -sS -H "$auth" "$api/$CUSTOM_DOMAIN" | grep -oE '"status":"[a-z_]+"' | head -1
       - name: Verify cross-origin isolation headers on the live site
         if: steps.creds.outputs.ok == 'true'
         run: |
@@ -62,3 +75,14 @@ jobs:
           echo "$h"
           echo "$h" | grep -qi "cross-origin-opener-policy: same-origin"
           echo "$h" | grep -qi "cross-origin-embedder-policy: require-corp"
+      - name: Check the custom domain (warns until DNS and certificate are ready)
+        if: steps.creds.outputs.ok == 'true'
+        run: |
+          if h=$(curl -sSI --max-time 20 "https://$CUSTOM_DOMAIN/"); then
+            echo "$h"
+            echo "$h" | grep -qi "cross-origin-embedder-policy: require-corp" \
+              && echo "Live: https://$CUSTOM_DOMAIN" >> "$GITHUB_STEP_SUMMARY" \
+              || echo "::warning::https://$CUSTOM_DOMAIN answers but without COOP/COEP"
+          else
+            echo "::warning::https://$CUSTOM_DOMAIN is not reachable yet (DNS or certificate pending)"
+          fi
