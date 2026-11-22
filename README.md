@@ -31,6 +31,10 @@ needs for SharedArrayBuffer; the workflow checks the live site returns them.
 It needs two repository secrets: `CLOUDFLARE_API_TOKEN` (Account, Cloudflare
 Pages: Edit) and `CLOUDFLARE_ACCOUNT_ID`. Without them the deploy is skipped.
 
+The site is served at https://orderbook.aiwilltrade.com. The workflow attaches
+that domain to the Pages project through the Cloudflare API; the
+`aiwilltrade.com` zone needs a proxied `CNAME orderbook -> depthline.pages.dev`.
+
 ## How it works
 
 ```
