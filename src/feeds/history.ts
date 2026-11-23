@@ -6,10 +6,11 @@ import type { Fetcher } from './types';
  * than the ~720 bars a live subscription snapshot carries.
  *
  * Binance spot klines return at most 1000 bars per call; we page backwards with
- * endTime. Kraken's REST OHLC endpoint only ever returns the latest 720 bars,
- * the same as its WebSocket snapshot, so Kraken history older than that comes
- * from the matching Binance pair, rescaled to Kraken's price level (see
- * `stitchOlder`).
+ * endTime. Kraken's WebSocket OHLC snapshot carries only a handful of recent
+ * bars in production, and its REST OHLC endpoint only ever returns the latest
+ * 720, so Kraken gets its own 720 from REST (when the browser can reach it) and
+ * anything older from the matching Binance pair, rescaled to Kraken's price
+ * level (see `stitchOlder`).
  */
 
 /** total bars we aim to hold per series (live snapshot plus backfill) */
@@ -76,7 +77,7 @@ export function stitchOlder(older: Candle[], recent: Candle[]): Candle[] {
     px.push(k.c / c.c);
     vr += k.v; vo += c.v;
   }
-  if (px.length < 10) return [];
+  if (px.length < 1) return [];
   const p = median(px);
   const v = vo > 0 ? vr / vo : 1;
   const first = recent[0].t;
@@ -86,6 +87,22 @@ export function stitchOlder(older: Candle[], recent: Candle[]): Candle[] {
     out.push({ t: c.t, o: c.o * p, h: c.h * p, l: c.l * p, c: c.c * p, v: c.v * v, closed: true });
   }
   return out;
+}
+
+/** Kraken REST pair name for a WS v2 symbol: BTC/USD -> XBTUSD, DOGE/USD -> XDGUSD */
+export function krakenRestPair(symbol: string): string {
+  const [b, q] = symbol.split('/');
+  const base = b === 'BTC' ? 'XBT' : b === 'DOGE' ? 'XDG' : b;
+  return base + q;
+}
+
+/** Kraken's latest (up to 720) OHLC bars over REST, oldest first, all marked closed. */
+export async function krakenOhlc(fetchJson: Fetcher, restBase: string, symbol: string, intervalMin: number): Promise<Candle[]> {
+  const r = await fetchJson(`${restBase}/0/public/OHLC?pair=${krakenRestPair(symbol)}&interval=${intervalMin}`);
+  if (r?.error?.length) throw new Error(r.error.join(', '));
+  const key = Object.keys(r?.result ?? {}).find((k) => k !== 'last');
+  const rows: any[] = key ? r.result[key] : [];
+  return rows.map((x) => ({ t: x[0] * 1000, o: +x[1], h: +x[2], l: +x[3], c: +x[4], v: +x[6], closed: true }));
 }
 
 /** interval of a series in ms, from its first two bars; 0 when unknown */
