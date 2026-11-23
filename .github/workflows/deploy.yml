@@ -70,8 +70,12 @@ jobs:
       - name: Verify cross-origin isolation headers on the live site
         if: steps.creds.outputs.ok == 'true'
         run: |
-          sleep 10
-          h=$(curl -sSI "${{ steps.deploy.outputs.url }}/")
+          # A new deployment's hostname can take a minute to get its certificate.
+          for i in $(seq 1 12); do
+            h=$(curl -sSI --max-time 20 "${{ steps.deploy.outputs.url }}/") && break
+            echo "Not reachable yet (attempt $i), retrying in 10s"
+            sleep 10
+          done
           echo "$h"
           echo "$h" | grep -qi "cross-origin-opener-policy: same-origin"
           echo "$h" | grep -qi "cross-origin-embedder-policy: require-corp"
