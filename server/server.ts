@@ -49,7 +49,7 @@ function getSeries(sim: MarketSim, minutes: number): Candle[] {
   const key = `${sim.inst.symbol}:${minutes}`;
   let s = series.get(key);
   if (!s) {
-    s = synthHistory(sim.midTick * sim.inst.tickSize, 720, minutes * 60_000, seed++ * 31);
+    s = synthHistory(sim.midTick * sim.inst.tickSize, 3000, minutes * 60_000, seed++ * 31);
     // re-anchor the sim's mid to the end of the history so the book matches the chart
     const shift = sim.midTick * sim.inst.tickSize - s[s.length - 1].c;
     for (const c of s) { c.o += shift; c.h += shift; c.l += shift; c.c += shift; }
@@ -119,7 +119,7 @@ function onKraken(ws: WebSocket) {
       cl.ohlc = { symbol: sym, interval: p.interval };
       ack({ channel: 'ohlc', symbol: sym, interval: p.interval });
       const s = getSeries(sim, p.interval);
-      ws.send(JSON.stringify({ channel: 'ohlc', type: 'snapshot', data: s.map((c) => krakenCandle(sym, c, p.interval)) }));
+      ws.send(JSON.stringify({ channel: 'ohlc', type: 'snapshot', data: s.slice(-720).map((c) => krakenCandle(sym, c, p.interval)) }));
     } else if (m.method === 'ping') {
       ws.send(JSON.stringify({ method: 'pong', req_id: m.req_id }));
     }
@@ -178,8 +178,10 @@ function binanceRest(url: URL, res: http.ServerResponse) {
     const iv = url.searchParams.get('interval') ?? '1m';
     const minutes = iv.endsWith('h') ? parseInt(iv) * 60 : parseInt(iv);
     const s = getSeries(sim, minutes);
-    const limit = Number(url.searchParams.get('limit') ?? 500);
-    return send(200, s.slice(-limit).map((c) => [c.t, String(c.o), String(c.h), String(c.l), String(c.c), String(c.v), c.t + minutes * 60_000 - 1]));
+    const limit = Math.min(1000, Number(url.searchParams.get('limit') ?? 500));
+    const endTime = Number(url.searchParams.get('endTime') ?? Infinity);
+    const upto = s.filter((c) => c.t <= endTime);
+    return send(200, upto.slice(-limit).map((c) => [c.t, String(c.o), String(c.h), String(c.l), String(c.c), String(c.v), c.t + minutes * 60_000 - 1]));
   }
   send(404, { msg: 'not found' });
 }

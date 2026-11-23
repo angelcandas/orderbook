@@ -26,7 +26,10 @@ export class KrakenFeed {
     private depth: number,
     private sink: FeedSink,
     private socket: SocketFactory,
+    /** older bars to prepend to an OHLC snapshot; Kraken itself serves only the latest 720 */
+    private backfill?: (symbol: string, interval: number, snapshot: Candle[]) => Promise<Candle[]>,
   ) {}
+  private backfilled = '';
 
   start(): void {
     this.closed = false;
@@ -54,6 +57,7 @@ export class KrakenFeed {
   setOhlc(symbol: string | null, interval: number): void {
     if (this.ohlc) this.send({ method: 'unsubscribe', params: { channel: 'ohlc', symbol: [this.ohlc.symbol], interval: this.ohlc.interval } });
     this.ohlc = symbol ? { symbol, interval } : null;
+    this.backfilled = '';
     if (this.ohlc && this.insts.size) this.subscribeOhlc();
   }
 
@@ -170,8 +174,24 @@ export class KrakenFeed {
       const cs = data.map(toCandle).sort((a, b) => a.t - b.t);
       cs.forEach((c, i) => (c.closed = i < cs.length - 1));
       this.sink.onCandles(sym, cs);
+      this.loadOlder(sym, cs);
     } else {
       for (const k of data) this.sink.onCandle(sym, toCandle(k));
     }
+  }
+
+  /** once per symbol and interval: resubscribes after a reconnect keep what the analytics worker holds */
+  private loadOlder(sym: string, cs: Candle[]): void {
+    const o = this.ohlc;
+    if (!this.backfill || !o || o.symbol !== sym || !cs.length) return;
+    const key = `${sym}:${o.interval}`;
+    if (this.backfilled === key) return;
+    this.backfilled = key;
+    this.backfill(sym, o.interval, cs).then((older) => {
+      if (this.ohlc?.symbol === sym && this.ohlc.interval === o.interval && older.length) this.sink.onHistory(sym, older, 'binance');
+    }, (e) => {
+      if (this.backfilled === key) this.backfilled = '';
+      this.sink.log(`kraken backfill failed: ${e}`);
+    });
   }
 }

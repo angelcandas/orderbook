@@ -4,7 +4,9 @@ import { BinanceFeed } from '../feeds/binance';
 import type { FeedSink } from '../feeds/types';
 import type { Book } from '../engine/book';
 import { Histogram } from '../shared/hist';
-import { binanceInterval, type Interval } from '../shared/config';
+import { binanceInterval, PAIRS, type Interval } from '../shared/config';
+import { binanceHistory, stitchOlder, HISTORY_BARS } from '../feeds/history';
+import type { Candle } from '../patterns/candle';
 import { Status, STATUS_NAMES, VIEW_LEN, seqWrite, writeView, wrapView } from '../shared/view';
 import type { FeedCmd, FeedInit, FeedStats } from './protocol';
 
@@ -56,6 +58,8 @@ function markDirty(): void {
   else publishTimer = setTimeout(publish, MIN_PUBLISH_MS - since);
 }
 
+let focusInterval = 0;
+
 const sink: FeedSink = {
   onBook(symbol: string, _book: Book) {
     if (symbol === focus.symbol) markDirty();
@@ -70,6 +74,9 @@ const sink: FeedSink = {
   },
   onCandle(symbol, candle) {
     init.analyticsPort.postMessage({ type: 'candle', venue: init.venue, symbol, candle });
+  },
+  onHistory(symbol, candles, source) {
+    init.analyticsPort.postMessage({ type: 'history', venue: init.venue, symbol, candles, source });
   },
   onTiming(p, a) {
     parseH.record(p);
@@ -111,15 +118,25 @@ self.onmessage = (ev: MessageEvent<FeedCmd | { type: 'resetStats' }>) => {
       if (e.data?.type === 'return') fallbackBuf = e.data.data;
     };
     const sock = (u: string) => new WebSocket(u) as any;
+    const fetchJson = async (u: string) => {
+      const r = await fetch(u);
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    };
     if (m.venue === 'kraken') {
-      feed = new KrakenFeed(m.endpoints.krakenWs, m.symbols, m.depth, sink, sock);
+      // Kraken serves only its latest 720 bars; older ones come from the same pair on Binance
+      const backfill = async (symbol: string, interval: number, snap: Candle[]) => {
+        const pair = PAIRS.find((p) => p.kraken === symbol);
+        if (!pair) return [];
+        const stepMs = interval * 60_000;
+        const alive = () => focusInterval === interval;
+        const older = await binanceHistory(fetchJson, m.endpoints.binanceRest, pair.binance, binanceInterval(interval as Interval),
+          snap[snap.length - 1].t + stepMs, HISTORY_BARS, alive);
+        return stitchOlder(older, snap);
+      };
+      feed = new KrakenFeed(m.endpoints.krakenWs, m.symbols, m.depth, sink, sock, backfill);
       feed.start();
     } else {
-      const fetchJson = async (u: string) => {
-        const r = await fetch(u);
-        if (!r.ok) throw new Error(`${r.status}`);
-        return r.json();
-      };
       feed = new BinanceFeed(m.endpoints.binanceWs, m.endpoints.binanceRest, m.symbols, m.depth, sink, sock, fetchJson);
       feed.start().catch((e) => sink.log(String(e)));
     }
@@ -128,6 +145,7 @@ self.onmessage = (ev: MessageEvent<FeedCmd | { type: 'resetStats' }>) => {
     focus = { symbol: m.symbol, pair: m.pair, group: m.group };
     markDirty();
   } else if (m.type === 'candles') {
+    focusInterval = m.interval;
     if (feed instanceof KrakenFeed) feed.setOhlc(m.symbol, m.interval);
     else feed.setKline(m.symbol, binanceInterval(m.interval as Interval));
   } else if (m.type === 'resetStats') {

@@ -25,6 +25,8 @@ export interface FeedSink {
   onCandles(symbol: string, candles: Candle[]): void;
   /** one candle created or updated (matched by open time) */
   onCandle(symbol: string, candle: Candle): void;
+  /** closed bars older than the current history, oldest first (prepended) */
+  onHistory(symbol: string, candles: Candle[], source: string): void;
   /** parse + apply time of one message, ms */
   onTiming(parseMs: number, applyMs: number, levels: number): void;
   log(msg: string): void;
