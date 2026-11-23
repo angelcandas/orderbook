@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { binanceHistory, stitchOlder, prepend, HISTORY_BARS } from '../src/feeds/history';
+import { binanceHistory, krakenOhlc, krakenRestPair, stitchOlder, prepend, HISTORY_BARS } from '../src/feeds/history';
 import { detect } from '../src/patterns/detect';
 import { synthHistory } from '../server/sim';
 import type { Candle } from '../src/patterns/candle';
@@ -47,6 +47,24 @@ describe('history backfill', () => {
     expect(out[out.length - 1].t).toBe(recent[0].t - M);
     expect(out[10].c).toBeCloseTo(older[10].c * 1.001, 6);
     expect(out[10].v).toBeCloseTo(0.5, 6);
+  });
+  it('stitches onto a short live snapshot', () => {
+    const older = bars(0, 3000, 100);
+    const snap = older.slice(2990).map((c, i) => ({ ...c, closed: i < 9 }));
+    const out = stitchOlder(older, snap);
+    expect(out.length).toBe(2990);
+    expect(prepend(snap, out).length).toBe(3000);
+  });
+  it('reads Kraken REST OHLC and maps pair names', async () => {
+    expect(krakenRestPair('BTC/USD')).toBe('XBTUSD');
+    expect(krakenRestPair('DOGE/USD')).toBe('XDGUSD');
+    expect(krakenRestPair('ETH/USD')).toBe('ETHUSD');
+    const fetchJson = async (u: string) => {
+      expect(u).toBe('http://k/0/public/OHLC?pair=XBTUSD&interval=5');
+      return { error: [], result: { XXBTZUSD: [[1700000000, '1', '3', '0.5', '2', '1.9', '7.5', 4]], last: 1700000000 } };
+    };
+    const cs = await krakenOhlc(fetchJson, 'http://k', 'BTC/USD', 5);
+    expect(cs).toEqual([{ t: 1700000000000, o: 1, h: 3, l: 0.5, c: 2, v: 7.5, closed: true }]);
   });
   it('refuses to stitch series that do not overlap', () => {
     expect(stitchOlder(bars(0, 100), bars(500 * M, 100))).toEqual([]);

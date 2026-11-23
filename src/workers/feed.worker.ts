@@ -5,7 +5,7 @@ import type { FeedSink } from '../feeds/types';
 import type { Book } from '../engine/book';
 import { Histogram } from '../shared/hist';
 import { binanceInterval, PAIRS, type Interval } from '../shared/config';
-import { binanceHistory, stitchOlder, HISTORY_BARS } from '../feeds/history';
+import { binanceHistory, krakenOhlc, prepend, stitchOlder, HISTORY_BARS } from '../feeds/history';
 import type { Candle } from '../patterns/candle';
 import { Status, STATUS_NAMES, VIEW_LEN, seqWrite, writeView, wrapView } from '../shared/view';
 import type { FeedCmd, FeedInit, FeedStats } from './protocol';
@@ -126,13 +126,33 @@ self.onmessage = (ev: MessageEvent<FeedCmd | { type: 'resetStats' }>) => {
     if (m.venue === 'kraken') {
       // Kraken serves only its latest 720 bars; older ones come from the same pair on Binance
       const backfill = async (symbol: string, interval: number, snap: Candle[]) => {
-        const pair = PAIRS.find((p) => p.kraken === symbol);
-        if (!pair) return [];
         const stepMs = interval * 60_000;
         const alive = () => focusInterval === interval;
-        const older = await binanceHistory(fetchJson, m.endpoints.binanceRest, pair.binance, binanceInterval(interval as Interval),
-          snap[snap.length - 1].t + stepMs, HISTORY_BARS, alive);
-        return stitchOlder(older, snap);
+        // Kraken's own bars first: the WS snapshot is short, REST has the latest 720
+        let recent = snap;
+        let own = 0;
+        if (m.endpoints.krakenRest) {
+          try {
+            recent = prepend(snap, await krakenOhlc(fetchJson, m.endpoints.krakenRest, symbol, interval));
+            own = recent.length - snap.length;
+          } catch (e) {
+            sink.log(`kraken REST OHLC failed, using Binance only: ${e}`);
+          }
+        }
+        const pair = PAIRS.find((p) => p.kraken === symbol);
+        let older: Candle[] = [];
+        if (pair && alive()) {
+          try {
+            const b = await binanceHistory(fetchJson, m.endpoints.binanceRest, pair.binance, binanceInterval(interval as Interval),
+              snap[snap.length - 1].t + stepMs, HISTORY_BARS, alive);
+            older = stitchOlder(b, recent);
+          } catch (e) {
+            sink.log(`binance backfill failed: ${e}`);
+          }
+        }
+        const candles = older.concat(recent.slice(0, own));
+        const source = own && older.length ? 'kraken+binance' : own ? 'kraken' : 'binance';
+        return { candles, source };
       };
       feed = new KrakenFeed(m.endpoints.krakenWs, m.symbols, m.depth, sink, sock, backfill);
       feed.start();

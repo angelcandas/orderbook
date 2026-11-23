@@ -4,12 +4,15 @@ export interface Endpoints {
   krakenWs: string;
   binanceWs: string; // base, e.g. wss://data-stream.binance.vision
   binanceRest: string; // base, e.g. https://data-api.binance.vision
+  /** Kraken REST base for OHLC history; optional so older configs keep working */
+  krakenRest?: string;
 }
 
 export const LIVE: Endpoints = {
   krakenWs: 'wss://ws.kraken.com/v2',
   binanceWs: 'wss://data-stream.binance.vision',
   binanceRest: 'https://data-api.binance.vision',
+  krakenRest: 'https://api.kraken.com',
 };
 
 /** The local replay / synthetic server speaks both venues' protocols. */
@@ -18,6 +21,7 @@ export function localEndpoints(host = 'localhost:8787'): Endpoints {
     krakenWs: `ws://${host}/kraken`,
     binanceWs: `ws://${host}/binance`,
     binanceRest: `http://${host}/binance`,
+    krakenRest: `http://${host}/kraken`,
   };
 }
 

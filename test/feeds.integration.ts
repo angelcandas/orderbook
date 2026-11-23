@@ -4,7 +4,7 @@ const NEED_CANDLES = process.env.NO_CANDLES ? false : true;
 import WebSocket from 'ws';
 import { KrakenFeed } from '../src/feeds/kraken';
 import { BinanceFeed } from '../src/feeds/binance';
-import { binanceHistory, stitchOlder, HISTORY_BARS } from '../src/feeds/history';
+import { binanceHistory, krakenOhlc, prepend, stitchOlder, HISTORY_BARS } from '../src/feeds/history';
 import type { FeedSink } from '../src/feeds/types';
 import { STATUS_NAMES } from '../src/shared/view';
 
@@ -22,8 +22,11 @@ const sink: FeedSink = {
 };
 const sock = (u: string) => new WebSocket(u) as any;
 const fetchJson = async (u: string) => (await fetch(u)).json();
-const k = new KrakenFeed('ws://' + HOST + '/kraken', ['BTC/USD', 'ETH/USD'], 1000, sink, sock, async (_sym, iv, snap) =>
-  stitchOlder(await binanceHistory(fetchJson, 'http://' + HOST + '/binance', 'BTCUSDT', `${iv}m`, snap[snap.length - 1].t + iv * 60_000, HISTORY_BARS), snap));
+const k = new KrakenFeed('ws://' + HOST + '/kraken', ['BTC/USD', 'ETH/USD'], 1000, sink, sock, async (sym, iv, snap) => {
+  const recent = prepend(snap, await krakenOhlc(fetchJson, 'http://' + HOST + '/kraken', sym, iv));
+  const older = stitchOlder(await binanceHistory(fetchJson, 'http://' + HOST + '/binance', 'BTCUSDT', `${iv}m`, snap[snap.length - 1].t + iv * 60_000, HISTORY_BARS), recent);
+  return { candles: older.concat(recent.slice(0, recent.length - snap.length)), source: 'kraken+binance' };
+});
 const b = new BinanceFeed('ws://' + HOST + '/binance', 'http://' + HOST + '/binance', ['BTCUSDT', 'ETHUSDT'], 1000, sink, sock, fetchJson);
 k.start(); b.start(); k.setOhlc('BTC/USD', 1); b.setKline('BTCUSDT', '1m');
 setTimeout(() => {

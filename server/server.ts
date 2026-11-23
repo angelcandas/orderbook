@@ -7,6 +7,7 @@
  *
  *   npx tsx server/server.ts --rate 20000 --pairs 10 --port 8787
  */
+import { krakenRestPair } from '../src/feeds/history';
 import http from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { MarketSim, synthHistory, type LevelChange } from './sim';
@@ -119,7 +120,8 @@ function onKraken(ws: WebSocket) {
       cl.ohlc = { symbol: sym, interval: p.interval };
       ack({ channel: 'ohlc', symbol: sym, interval: p.interval });
       const s = getSeries(sim, p.interval);
-      ws.send(JSON.stringify({ channel: 'ohlc', type: 'snapshot', data: s.slice(-720).map((c) => krakenCandle(sym, c, p.interval)) }));
+      // like production: the WS snapshot carries only the last few bars; REST has the latest 720
+      ws.send(JSON.stringify({ channel: 'ohlc', type: 'snapshot', data: s.slice(-10).map((c) => krakenCandle(sym, c, p.interval)) }));
     } else if (m.method === 'ping') {
       ws.send(JSON.stringify({ method: 'pong', req_id: m.req_id }));
     }
@@ -141,6 +143,20 @@ function onBinance(ws: WebSocket, url: URL) {
     if (m.method === 'UNSUBSCRIBE') for (const s of m.params) cl.streams.delete(s);
     ws.send(JSON.stringify({ result: null, id: m.id }));
   });
+}
+
+/** Kraken REST OHLC: latest 720 bars, `[time s, o, h, l, c, vwap, volume, count]` */
+function krakenRest(url: URL, res: http.ServerResponse) {
+  const send = (code: number, body: unknown) => {
+    res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cross-origin-resource-policy': 'cross-origin' });
+    res.end(JSON.stringify(body));
+  };
+  const pair = url.searchParams.get('pair') ?? '';
+  const minutes = Number(url.searchParams.get('interval') ?? 1);
+  const sym = [...ksims.keys()].find((k) => krakenRestPair(k) === pair);
+  if (!sym) return send(200, { error: ['EQuery:Unknown asset pair'] });
+  const s = getSeries(ksims.get(sym)!, minutes).slice(-720);
+  send(200, { error: [], result: { [pair]: s.map((c) => [c.t / 1000, String(c.o), String(c.h), String(c.l), String(c.c), String(c.c), String(c.v), 1]), last: s[s.length - 1].t / 1000 } });
 }
 
 function binanceRest(url: URL, res: http.ServerResponse) {
@@ -287,6 +303,7 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({ rate: RATE, pairs: pairs.length }));
   }
   if (url.pathname.startsWith('/binance/')) return binanceRest(url, res);
+  if (url.pathname === '/kraken/0/public/OHLC') return krakenRest(url, res);
   res.writeHead(404); res.end();
 });
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });

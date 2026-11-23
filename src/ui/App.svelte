@@ -232,7 +232,7 @@
             </button></li>
           {/each}
         </ul>
-        <p class="dim small">Detected in {fmt(stats?.patterns.computeMs, 1)} ms over {int(stats?.patterns.candles)} candles, in a worker.{#if stats?.patterns.backfill}{' '}{int(stats.patterns.backfill)} older bars were backfilled over REST{#if venue === 'kraken' && stats.patterns.source === 'binance'}{' '}from Binance, rescaled to Kraken's price, since Kraken serves only its latest 720{/if}.{/if}</p>
+        <p class="dim small">Detected in {fmt(stats?.patterns.computeMs, 1)} ms over {int(stats?.patterns.candles)} candles, in a worker.{#if stats?.patterns.backfill}{' '}{int(stats.patterns.backfill)} older bars were backfilled over REST{#if venue === 'kraken'}{' '}({stats.patterns.source === 'kraken' ? "Kraken's own" : stats.patterns.source === 'kraken+binance' ? "Kraken's latest 720, older from Binance rescaled to Kraken's price" : "from Binance, rescaled to Kraken's price"}){/if}.{/if}</p>
       </section>
 
       <section>

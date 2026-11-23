@@ -27,7 +27,7 @@ export class KrakenFeed {
     private sink: FeedSink,
     private socket: SocketFactory,
     /** older bars to prepend to an OHLC snapshot; Kraken itself serves only the latest 720 */
-    private backfill?: (symbol: string, interval: number, snapshot: Candle[]) => Promise<Candle[]>,
+    private backfill?: (symbol: string, interval: number, snapshot: Candle[]) => Promise<{ candles: Candle[]; source: string }>,
   ) {}
   private backfilled = '';
 
@@ -187,8 +187,8 @@ export class KrakenFeed {
     const key = `${sym}:${o.interval}`;
     if (this.backfilled === key) return;
     this.backfilled = key;
-    this.backfill(sym, o.interval, cs).then((older) => {
-      if (this.ohlc?.symbol === sym && this.ohlc.interval === o.interval && older.length) this.sink.onHistory(sym, older, 'binance');
+    this.backfill(sym, o.interval, cs).then(({ candles, source }) => {
+      if (this.ohlc?.symbol === sym && this.ohlc.interval === o.interval && candles.length) this.sink.onHistory(sym, candles, source);
     }, (e) => {
       if (this.backfilled === key) this.backfilled = '';
       this.sink.log(`kraken backfill failed: ${e}`);
