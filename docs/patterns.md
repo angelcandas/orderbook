@@ -1,8 +1,26 @@
 # Pattern detection
 
 Detection runs in its own worker (`src/workers/analytics.worker.ts`) over up to
-1,000 candles, only when a candle closes, and takes about 1 to 5 ms. Code:
-`src/patterns/`.
+4,000 candles, only when a candle closes, and takes about 10 to 20 ms over the
+3,000 bar history it loads (measured under Node and headless Chromium against
+the emulator). Code: `src/patterns/`.
+
+## History
+
+Live subscriptions only carry a few hundred bars, too few for multi-week
+patterns on short intervals, so each series is backfilled over public REST
+(`src/feeds/history.ts`) to about 3,000 bars:
+
+- **Binance**: the latest 1,000 klines load first so the chart fills at once,
+  then two more pages of 1,000 are fetched backwards with `endTime`.
+- **Kraken**: the WebSocket snapshot and the REST OHLC endpoint both stop at
+  the latest 720 bars, so older bars come from the same pair on Binance,
+  rescaled to Kraken's price and volume level by the median ratio over the bars
+  both venues share. If the two don't overlap, nothing is stitched. The side
+  panel says how many bars were backfilled and from where.
+
+Backfilled bars survive a reconnect; switching pair or interval loads a fresh
+history.
 
 ## Sources
 

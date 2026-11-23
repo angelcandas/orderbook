@@ -153,7 +153,7 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
     }
     case 'wheel': {
       const c = scene.candles, d = scene.depth;
-      if (m.x >= c.x && m.y >= c.y && m.y <= c.y + c.h) settings.candlesVisible = Math.max(30, Math.min(720, Math.round(settings.candlesVisible * (m.dy > 0 ? 1.15 : 0.87))));
+      if (m.x >= c.x && m.y >= c.y && m.y <= c.y + c.h) settings.candlesVisible = Math.max(30, Math.min(2000, Math.round(settings.candlesVisible * (m.dy > 0 ? 1.15 : 0.87))));
       else if (m.x >= d.x && m.y >= d.y && m.y <= d.y + d.h) settings.depthRangePct = Math.max(0.01, Math.min(20, scene.depthPct * (m.dy > 0 ? 1.2 : 0.83)));
       dirty = PANE_ALL;
       break;

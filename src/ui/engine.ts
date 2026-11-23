@@ -34,7 +34,7 @@ export interface Snapshot {
   feeds: Partial<Record<Venue, FeedStats>>;
   render: RenderStats | null;
   main: MainStats;
-  patterns: { list: PatternHit[]; outcomes: Outcome[]; computeMs: number; candles: number };
+  patterns: { list: PatternHit[]; outcomes: Outcome[]; computeMs: number; candles: number; backfill: number; source: string };
 }
 
 export interface LadderRow { price: number; qty: number; cum: number }
@@ -63,7 +63,7 @@ export class Engine {
     };
     this.analytics = new Worker(new URL('../workers/analytics.worker.ts', import.meta.url), { type: 'module', name: 'analytics' });
     this.render = new Worker(new URL('../workers/render.worker.ts', import.meta.url), { type: 'module', name: 'render' });
-    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0 } };
+    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '' } };
 
     const fr = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const fa = { kraken: new MessageChannel(), binance: new MessageChannel() };
@@ -84,7 +84,7 @@ export class Engine {
     this.analytics.postMessage({ type: 'init', renderPort: ar.port1, feedPorts: [fa.kraken.port2, fa.binance.port2] }, [ar.port1, fa.kraken.port2, fa.binance.port2]);
     this.analytics.onmessage = (e) => {
       if (e.data.type === 'patterns' && e.data.venue === this.o.venue) {
-        this.snap.patterns = { list: e.data.patterns, outcomes: e.data.outcomes, computeMs: e.data.computeMs, candles: e.data.candles };
+        this.snap.patterns = { list: e.data.patterns, outcomes: e.data.outcomes, computeMs: e.data.computeMs, candles: e.data.candles, backfill: e.data.backfill ?? 0, source: e.data.source ?? '' };
       }
     };
 

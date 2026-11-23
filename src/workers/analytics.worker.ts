@@ -3,15 +3,15 @@ import type { Candle } from '../patterns/candle';
 import { detect } from '../patterns/detect';
 import type { AnalyticsOut } from '../patterns/types';
 import type { Venue } from '../shared/config';
+import { MAX_BARS, prepend, stepOf } from '../feeds/history';
 
 /**
  * Candles in, indicators and patterns out. Runs off the render and feed threads;
  * recomputes at most 4 times a second and only when candles changed.
  */
-const series: Record<Venue, { symbol: string; candles: Candle[] }> = {
-  kraken: { symbol: '', candles: [] },
-  binance: { symbol: '', candles: [] },
-};
+interface Held { symbol: string; candles: Candle[]; backfill: number; source: string }
+const empty = (): Held => ({ symbol: '', candles: [], backfill: 0, source: '' });
+const series: Record<Venue, Held> = { kraken: empty(), binance: empty() };
 let venue: Venue = 'kraken';
 let renderPort: MessagePort | null = null;
 let dirty = false;
@@ -24,7 +24,7 @@ function upsert(list: Candle[], c: Candle): void {
   if (!last || c.t > last.t) {
     if (last) last.closed = true;
     list.push(c);
-    if (list.length > 1000) list.shift();
+    if (list.length > MAX_BARS) list.shift();
   } else {
     // update in place (usually the forming candle)
     for (let i = list.length - 1; i >= 0 && i >= list.length - 3; i--) if (list[i].t === c.t) { list[i] = c; break; }
@@ -56,7 +56,7 @@ function compute(): void {
   }
   out.computeMs = performance.now() - t0;
   renderPort.postMessage(out, [out.t.buffer, out.o.buffer, out.h.buffer, out.l.buffer, out.c.buffer, out.v.buffer]);
-  if (fresh) postMessage({ type: 'patterns', venue, symbol, patterns: d.patterns, outcomes: d.outcomes, computeMs: out.computeMs, candles: n });
+  if (fresh) postMessage({ type: 'patterns', venue, symbol, patterns: d.patterns, outcomes: d.outcomes, computeMs: out.computeMs, candles: n, backfill: series[venue].backfill, source: series[venue].source });
 }
 
 function schedule(): void {
@@ -68,8 +68,23 @@ function onFeed(e: MessageEvent): void {
   const m = e.data;
   const s = series[m.venue as Venue];
   if (m.type === 'candles') {
+    const next: Candle[] = m.candles;
+    // a fresh snapshot after a reconnect: keep the backfilled bars that still line up
+    const same = m.symbol === s.symbol && stepOf(next) > 0 && stepOf(next) === stepOf(s.candles);
+    const merged = same ? prepend(next, s.candles.filter((c) => c.closed)) : next;
+    if (!same) { s.backfill = 0; s.source = ''; }
+    else s.backfill = Math.max(0, Math.min(s.backfill, merged.length - next.length));
     s.symbol = m.symbol;
-    s.candles = m.candles;
+    s.candles = merged;
+    if (m.venue === venue) { cached = null; schedule(); }
+  } else if (m.type === 'history') {
+    if (m.symbol !== s.symbol) return;
+    const before = s.candles.length;
+    s.candles = prepend(s.candles, m.candles);
+    const added = s.candles.length - before;
+    if (added <= 0) return;
+    s.backfill += added;
+    s.source = m.source;
     if (m.venue === venue) { cached = null; schedule(); }
   } else if (m.type === 'candle') {
     if (m.symbol !== s.symbol) return;
@@ -88,8 +103,8 @@ self.onmessage = (e: MessageEvent) => {
     cached = null;
     schedule();
   } else if (m.type === 'reset') {
-    series.kraken = { symbol: '', candles: [] };
-    series.binance = { symbol: '', candles: [] };
+    series.kraken = empty();
+    series.binance = empty();
     cached = null;
     schedule();
   }

@@ -1,7 +1,7 @@
 import { Book, decimalsOfIncrement, type Instrument } from '../engine/book';
 import { Status } from '../shared/view';
 import { nowAbs } from '../shared/hist';
-import type { Candle } from '../patterns/candle';
+import { binanceHistory, klineRows, HISTORY_BARS } from './history';
 import { newCounters, type Fetcher, type FeedSink, type SocketFactory, type SocketLike } from './types';
 
 interface SymState {
@@ -207,13 +207,17 @@ export class BinanceFeed {
   private async loadKlines(): Promise<void> {
     if (!this.kline) return;
     const { symbol, interval } = this.kline;
+    const alive = () => !this.closed && this.kline?.symbol === symbol && this.kline?.interval === interval;
     try {
-      const rows: any[] = await this.fetchJson(`${this.restBase}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=720`);
-      if (!this.kline || this.kline.symbol !== symbol || this.kline.interval !== interval) return;
-      const cs: Candle[] = rows.map((r, i) => ({
-        t: r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5], closed: i < rows.length - 1,
-      }));
+      // recent page first so the chart fills fast, then older pages for the detectors
+      const rows: any[] = await this.fetchJson(`${this.restBase}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1000`);
+      if (!alive()) return;
+      const cs = klineRows(rows);
+      if (cs.length) cs[cs.length - 1].closed = false;
       this.sink.onCandles(symbol, cs);
+      if (!cs.length || rows.length < 1000) return;
+      const older = await binanceHistory(this.fetchJson, this.restBase, symbol, interval, cs[0].t, HISTORY_BARS - cs.length, alive);
+      if (alive() && older.length) this.sink.onHistory(symbol, older, 'binance');
     } catch (e) {
       this.sink.log(`binance klines failed: ${e}`);
     }
