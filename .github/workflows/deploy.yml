@@ -60,13 +60,14 @@ jobs:
         run: |
           api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PROJECT/domains"
           auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
-          if curl -sS -H "$auth" "$api" | grep -q "\"name\":\"$CUSTOM_DOMAIN\""; then
+          # The API pretty-prints JSON, so match with optional whitespace.
+          if curl -sS -H "$auth" "$api/$CUSTOM_DOMAIN" | grep -qE '"success": *true'; then
             echo "$CUSTOM_DOMAIN is already attached"
           else
             curl -sS --fail-with-body -X POST -H "$auth" -H "Content-Type: application/json" \
               --data "{\"name\":\"$CUSTOM_DOMAIN\"}" "$api"
           fi
-          curl -sS -H "$auth" "$api/$CUSTOM_DOMAIN" | grep -oE '"status":"[a-z_]+"' | head -1
+          curl -sS -H "$auth" "$api/$CUSTOM_DOMAIN" | grep -oE '"status": *"[a-z_]+"' | head -1
       - name: Verify cross-origin isolation headers on the live site
         if: steps.creds.outputs.ok == 'true'
         run: |
