@@ -9,6 +9,8 @@
   import PairPicker from './PairPicker.svelte';
   import type { SceneSettings } from '../render/scene';
   import type { PatternHit } from '../patterns/types';
+  import Alerts from './Alerts.svelte';
+  import { midOf } from '../alerts/alerts';
   import LiquidationHeatmap from './LiquidationHeatmap.svelte';
   import { HEADER_CTRL_W } from '../render/scene';
   import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs } from '../render/layout';
@@ -52,7 +54,8 @@
   const persist = () => savePrefs({ layout: layoutPrefs, sideW, fontPx, ...zoomState } satisfies ViewPrefs);
 
   let stats = $state<Snapshot | null>(null);
-  let table = $state<{ status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number } | null>(null);
+  let table = $state<ReturnType<Engine['ladder']>>(null);
+  let alertsPanel: ReturnType<typeof Alerts> | undefined = $state();
   let engine: Engine | null = null;
   let canvasHost: HTMLDivElement;
   let generation = $state(0); // remounts the canvas: a canvas can only be transferred once
@@ -88,6 +91,7 @@
       engine?.setCatalog(catalog);
     };
     engine.onSelected = (id) => (selected = id);
+    alertsPanel?.attach(engine);
     (window as any).__depthline = engine;
   }
 
@@ -329,6 +333,8 @@
     <div class="split v side" role="separator" aria-orientation="vertical" aria-label="Resize side panel" tabindex="0" aria-valuemin={SIDE_W.min} aria-valuemax={SIDE_W.max} aria-valuenow={sideW}
       onpointerdown={dragSide} onkeydown={sideKey} ondblclick={() => { sideW = SIDE_W.def; persist(); }}></div>
     <aside style="--side-w:{sideW}px">
+      <Alerts bind:this={alertsPanel} {venue} label={res ? `${res.base}/${res.quote}` : pair} symbol={res?.symbol ?? null} mid={table ? midOf(table.bestBid, table.bestAsk) : NaN} decimals={table?.decimals} />
+
       <section>
         <h2>Feed integrity <span class="pill" class:ok={focusStatus.startsWith('live')} class:bad={focusStatus.startsWith('error') || focusStatus === 'not listed'}>{focusStatus}</span></h2>
         {#if !res}<p class="dim small">{venueName(venue)} doesn't list {pair}.{#if index[venue === 'kraken' ? 'binance' : 'kraken'].resolve(pair)}{' '}{venueName(venue === 'kraken' ? 'binance' : 'kraken')} does.{/if}</p>

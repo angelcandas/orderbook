@@ -3,6 +3,7 @@ import type { Endpoints, Venue } from '../shared/config';
 import type { HistSummary } from '../shared/hist';
 import type { FeedCounters } from '../feeds/types';
 import type { SceneSettings } from '../render/scene';
+import type { ArmedAlert } from '../alerts/alerts';
 import type { LayoutPrefs } from '../render/layout';
 
 export interface FeedInit {
@@ -23,6 +24,8 @@ export type FeedCmd =
   | { type: 'symbols'; symbols: string[] }
   /** `alt`: the same pair's Binance symbol, which Kraken backfills older candles from */
   | { type: 'candles'; symbol: string | null; interval: number; alt?: string | null }
+  /** replaces the armed price alerts for this venue */
+  | { type: 'alerts'; list: ArmedAlert[] }
   | { type: 'stop' };
 
 export interface FeedStats {

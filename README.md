@@ -76,6 +76,12 @@ that domain to the Pages project through the Cloudflare API; the
   is skipped entirely when nothing changed.
 - **Analytics worker** turns candles into EMA(20/50), ATR(14) and patterns
   ([docs/patterns.md](docs/patterns.md)) when a candle closes.
+- **Price alerts** (`src/alerts/`): levels set in the side panel are kept in
+  localStorage and handed to the feed worker of their venue, which checks the
+  mid price of each live book every 200 ms on its own timer, never inside the
+  per-message path. A hit shows an in-app toast and, if allowed, a desktop
+  notification. A pair with an armed alert stays subscribed even when it is not
+  on screen. A move that reverses within 200 ms can be missed.
 - **Liquidation worker** (`src/workers/liquidation.worker.ts`) is separate from
   the book path: its own socket to Binance USD-M futures (`aggTrade` and
   `forceOrder` for the focused pair) and its own canvas. Kraken spot has no

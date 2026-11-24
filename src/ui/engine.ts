@@ -8,6 +8,7 @@ import type { PatternHit } from '../patterns/types';
 import type { LayoutPrefs } from '../render/layout';
 import type { ZoomPane, ZoomState } from '../workers/protocol';
 import type { Outcome } from '../patterns/detect';
+import { armed, type Alert, type AlertHit } from '../alerts/alerts';
 
 export interface EngineOptions {
   canvas: HTMLCanvasElement;
@@ -62,6 +63,9 @@ export class Engine {
   private local = new Float64Array(VIEW_LEN);
   onStats: (s: Snapshot) => void = () => {};
   onSelected: (id: string | null) => void = () => {};
+  onAlert: (hit: AlertHit) => void = () => {};
+  /** symbols with armed alerts, kept live so their alerts can fire */
+  private alertSyms: Record<Venue, string[]> = { kraken: [], binance: [] };
   /** a venue sent its full market list */
   onMarkets: (venue: Venue, markets: Market[]) => void = () => {};
   private idx: Record<Venue, MarketIndex>;
@@ -90,6 +94,7 @@ export class Engine {
       w.onmessage = (e) => {
         if (e.data.type === 'stats') this.snap.feeds[v] = e.data;
         else if (e.data.type === 'markets') this.onMarkets(v, e.data.markets);
+        else if (e.data.type === 'alert') this.onAlert(e.data);
       };
       const symbols = this.symbolsFor(v);
       this.sent[v] = symbols.join(',');
@@ -174,7 +179,9 @@ export class Engine {
   /** the focused pair's book plus built in pairs up to the load setting */
   private symbolsFor(v: Venue): string[] {
     const builtin = PAIRS.map((p) => p[v]).filter((s) => !this.idx[v].size || this.idx[v].markets.some((m) => m.symbol === s));
-    return liveSymbols(this.resolved(v)?.symbol ?? null, builtin, this.o.pairCount);
+    const live = liveSymbols(this.resolved(v)?.symbol ?? null, builtin, this.o.pairCount);
+    for (const s of this.alertSyms[v]) if (!live.includes(s)) live.push(s);
+    return live;
   }
 
   /** tell each feed which books to keep, only when that changed */
@@ -224,6 +231,16 @@ export class Engine {
   }
   setGroup(g: number): void { this.o.group = g; this.applyFocus(); }
   setInterval(m: Interval): void { this.o.interval = m; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
+  /** Hand each feed the armed alerts for its venue (replaces the previous set). */
+  setAlerts(list: Alert[]): void {
+    for (const v of ['kraken', 'binance'] as Venue[]) {
+      const a = armed(list, v);
+      this.alertSyms[v] = [...new Set(a.map((x) => x.symbol))];
+      this.feeds[v].postMessage({ type: 'alerts', list: a });
+    }
+    // pairs with armed alerts stay subscribed even when they are not on screen
+    this.syncSymbols();
+  }
   setSettings(s: Partial<SceneSettings>): void { this.render.postMessage({ type: 'settings', settings: s }); }
   setTheme(t: 'dark' | 'light'): void { this.render.postMessage({ type: 'theme', theme: t }); }
   resize(w: number, h: number): void { this.render.postMessage({ type: 'resize', w, h, dpr: devicePixelRatio }); }
@@ -246,13 +263,13 @@ export class Engine {
   }
 
   /** Read the focused book for the accessible table (main thread, low rate). */
-  ladder(): { status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number } | null {
+  ladder(): { status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number; bestBid: number; bestAsk: number } | null {
     if (!this.shared) return null;
     const v = this.views[this.o.venue];
     if (!seqRead(v.seq, v.data, this.local)) return null;
     const d = this.local;
     const rows = (base: number, n: number) => Array.from({ length: Math.min(n, 15) }, (_, i) => ({ price: d[base + i * 3], qty: d[base + i * 3 + 1], cum: d[base + i * 3 + 2] }));
-    return { status: STATUS_NAMES[d[H.status]] ?? '', bids: rows(LAD_BID, d[H.nLadBid]), asks: rows(LAD_ASK, d[H.nLadAsk]), decimals: d[H.priceDecimals] };
+    return { status: STATUS_NAMES[d[H.status]] ?? '', bids: rows(LAD_BID, d[H.nLadBid]), asks: rows(LAD_ASK, d[H.nLadAsk]), decimals: d[H.priceDecimals], bestBid: d[H.bestBid], bestAsk: d[H.bestAsk] };
   }
 
   destroy(): void {

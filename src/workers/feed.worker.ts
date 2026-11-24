@@ -9,6 +9,7 @@ import { binanceHistory, krakenOhlc, prepend, stitchOlder, HISTORY_BARS } from '
 import type { Candle } from '../patterns/candle';
 import { Status, STATUS_NAMES, VIEW_LEN, seqWrite, writeView, wrapView } from '../shared/view';
 import type { FeedCmd, FeedInit, FeedMarkets, FeedStats } from './protocol';
+import { AlertChecker, CHECK_MS, midOf } from '../alerts/alerts';
 
 let feed: KrakenFeed | BinanceFeed;
 let init: FeedInit;
@@ -94,6 +95,19 @@ const sink: FeedSink = {
     console.warn(`[feed ${init.venue}]`, m);
   },
 };
+
+// price alerts: checked on a timer, off the per-message path
+const alerts = new AlertChecker();
+let alertTimer: any = null;
+const livePrice = (symbol: string): number => {
+  if (statusCode.get(symbol) !== Status.Live) return NaN;
+  const b = feed.books.get(symbol);
+  return b ? midOf(b.bids.bestTick * b.inst.tickSize, b.asks.bestTick * b.inst.tickSize) : NaN;
+};
+function checkAlerts(): void {
+  for (const hit of alerts.check(livePrice, Date.now())) postMessage(hit);
+  if (alerts.size === 0) { clearInterval(alertTimer); alertTimer = null; }
+}
 
 function stats(): void {
   const now = performance.now();
@@ -184,6 +198,9 @@ self.onmessage = (ev: MessageEvent<FeedCmd | { type: 'resetStats' }>) => {
     altSymbol = m.alt ?? null;
     if (feed instanceof KrakenFeed) feed.setOhlc(m.symbol, m.interval);
     else feed.setKline(m.symbol, binanceInterval(m.interval as Interval));
+  } else if (m.type === 'alerts') {
+    alerts.set(m.list);
+    if (alerts.size && alertTimer === null && feed) alertTimer = setInterval(checkAlerts, CHECK_MS);
   } else if (m.type === 'resetStats') {
     parseH.reset(); applyH.reset(); publishH.reset();
   } else if (m.type === 'stop') {
