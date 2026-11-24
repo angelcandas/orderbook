@@ -6,6 +6,9 @@ export interface Endpoints {
   binanceRest: string; // base, e.g. https://data-api.binance.vision
   /** Kraken REST base for OHLC history; optional so older configs keep working */
   krakenRest?: string;
+  /** Binance USD-M futures, for liquidation levels: WS root (routes /market) and REST root */
+  futuresWs?: string;
+  futuresRest?: string;
 }
 
 export const LIVE: Endpoints = {
@@ -13,6 +16,8 @@ export const LIVE: Endpoints = {
   binanceWs: 'wss://data-stream.binance.vision',
   binanceRest: 'https://data-api.binance.vision',
   krakenRest: 'https://api.kraken.com',
+  futuresWs: 'wss://fstream.binance.com',
+  futuresRest: 'https://fapi.binance.com',
 };
 
 /** The local replay / synthetic server speaks both venues' protocols. */
@@ -22,6 +27,8 @@ export function localEndpoints(host = 'localhost:8787'): Endpoints {
     binanceWs: `ws://${host}/binance`,
     binanceRest: `http://${host}/binance`,
     krakenRest: `http://${host}/kraken`,
+    futuresWs: `ws://${host}/futures`,
+    futuresRest: `http://${host}/futures`,
   };
 }
 

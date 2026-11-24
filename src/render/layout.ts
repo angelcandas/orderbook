@@ -74,6 +74,7 @@ export function dragSplit(p: LayoutPrefs, which: 'ladder' | 'depth', x: number, 
 /** Zoom limits and defaults for each pane. */
 export const ZOOM = {
   candles: { min: 30, max: 2000, def: 160 },
+  priceScale: { min: 0.2, max: 40, def: 1 },
   depthPct: { min: 0.01, max: 20 },
   rowPad: { min: 0, max: 14, def: 3 },
   font: { min: 9, max: 14, def: 11 },

@@ -56,6 +56,8 @@ export interface RenderInit {
   shared: boolean;
   feedPorts: { kraken: MessagePort; binance: MessagePort };
   analyticsPort: MessagePort;
+  /** liquidation level columns from the liquidation worker */
+  liqPort?: MessagePort;
   settings: SceneSettings;
   theme: 'dark' | 'light';
   layout?: LayoutPrefs;
@@ -67,11 +69,13 @@ export type RenderCmd =
   | { type: 'venue'; venue: Venue }
   | { type: 'pointer'; x: number; y: number; in: boolean }
   | { type: 'click'; x: number; y: number }
-  | { type: 'wheel'; x: number; y: number; dy: number }
   /** a box dragged on the candle chart; on 'end' the worker answers with a WindowPicked */
   | { type: 'brush'; x0: number; y0: number; x1: number; y1: number; phase: 'move' | 'end' | 'cancel' }
   /** dir: +1 zoom in, -1 zoom out, 0 back to the default */
   | { type: 'zoom'; pane: ZoomPane; dir: 1 | -1 | 0 }
+  /** candle chart axis zoom: multiply by factor (>1 zooms in); factor 0 resets that axis */
+  | { type: 'candleScale'; axis: 'x' | 'y'; factor: number }
+  | { type: 'wheel'; x: number; y: number; dy: number; shift?: boolean }
   | { type: 'layout'; layout: LayoutPrefs }
   | { type: 'font'; px: number }
   | { type: 'settings'; settings: Partial<SceneSettings> }
@@ -83,7 +87,7 @@ export interface WindowPicked { type: 'window'; window: AnalysisWindow | null }
 
 export type ZoomPane = 'ladder' | 'depth' | 'candles';
 /** Sent by the render worker after a zoom so the page can remember it. */
-export interface ZoomState { type: 'zoom'; candlesVisible: number; depthRangePct: number; ladderRowPad: number }
+export interface ZoomState { type: 'zoom'; candlesVisible: number; depthRangePct: number; ladderRowPad: number; candlesPriceScale: number }
 
 export interface RenderStats {
   type: 'stats';

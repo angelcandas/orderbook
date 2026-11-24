@@ -13,8 +13,7 @@
   import { explain, explanationText, type Explanation } from '../patterns/explain';
   import Alerts from './Alerts.svelte';
   import { midOf } from '../alerts/alerts';
-  import LiquidationHeatmap from './LiquidationHeatmap.svelte';
-  import { HEADER_CTRL_W } from '../render/scene';
+  import { HEADER_CTRL_W, CANDLE_AXIS_W, CANDLE_TIME_H, PANE_HEADER } from '../render/scene';
   import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs } from '../render/layout';
   import type { ZoomPane } from '../workers/protocol';
   import { loadPrefs, savePrefs, defaultPrefs, SIDE_W, type ViewPrefs } from './prefs';
@@ -41,8 +40,6 @@
   let reducedMotion = $state(matchMedia('(prefers-reduced-motion: reduce)').matches);
   let showTable = $state(false);
   let showLiq = $state(q.get('liq') !== '0');
-  // futures are quoted in USDT whatever the spot quote: BTC/USD, BTC/EUR -> BTCUSDT
-  let liqSpot = $derived(`${splitLabel(pair)?.base ?? 'BTC'}USDT`);
   let selected = $state<string | null>(null);
   // analysis window: a box dragged on the candle chart; patterns are searched inside it only
   let win = $state.raw<AnalysisWindow | null>(null);
@@ -55,7 +52,7 @@
   let layoutPrefs = $state.raw<LayoutPrefs>(saved.layout);
   let sideW = $state(saved.sideW);
   let fontPx = $state(saved.fontPx);
-  let zoomState = { candlesVisible: saved.candlesVisible, depthRangePct: saved.depthRangePct, ladderRowPad: saved.ladderRowPad };
+  let zoomState = $state.raw({ candlesVisible: saved.candlesVisible, depthRangePct: saved.depthRangePct, ladderRowPad: saved.ladderRowPad, candlesPriceScale: saved.candlesPriceScale });
   let stageW = $state(0), stageH = $state(0);
   let panes = $derived(stageW ? computeLayout(stageW, stageH, layoutPrefs) : null);
   const persist = () => savePrefs({ layout: layoutPrefs, sideW, fontPx, ...zoomState } satisfies ViewPrefs);
@@ -70,8 +67,8 @@
   let tableTimer: any;
 
   const settings = (): SceneSettings => ({
-    depthRangePct: zoomState.depthRangePct, candlesVisible: zoomState.candlesVisible, ladderRowPad: zoomState.ladderRowPad, reducedMotion,
-    showChartPatterns: showChart, showCandlePatterns: showCandle, selectedPattern: selected,
+    depthRangePct: zoomState.depthRangePct, candlesVisible: zoomState.candlesVisible, ladderRowPad: zoomState.ladderRowPad, candlesPriceScale: zoomState.candlesPriceScale, reducedMotion,
+    showChartPatterns: showChart, showCandlePatterns: showCandle, selectedPattern: selected, showLiquidations: showLiq,
     venueLabel: venue.toUpperCase(), pairLabel: res ? `${res.base}/${res.quote}` : pair,
   });
 
@@ -86,7 +83,7 @@
       venue, pair, catalog, group, interval, settings: settings(), theme, layout: layoutPrefs, fontPx,
     });
     engine.onZoom = (z) => {
-      zoomState = { candlesVisible: z.candlesVisible, depthRangePct: z.depthRangePct, ladderRowPad: z.ladderRowPad };
+      zoomState = { candlesVisible: z.candlesVisible, depthRangePct: z.depthRangePct, ladderRowPad: z.ladderRowPad, candlesPriceScale: z.candlesPriceScale };
       persist();
     };
     engine.onStats = (s) => (stats = s);
@@ -145,7 +142,8 @@
   function brushStart(e: PointerEvent) {
     if (!panes || e.button !== 0 || !(drawMode || e.shiftKey)) return;
     const p = local(e), c = panes.candles;
-    if (p.x < c.x || p.x > c.x + c.w || p.y < c.y + 24 || p.y > c.y + c.h) return;
+    // the plot only: not the header buttons or the price / time axis zoom handles
+    if (p.x < c.x || p.x > c.x + c.w - CANDLE_AXIS_W || p.y < c.y + PANE_HEADER || p.y > c.y + c.h - CANDLE_TIME_H) return;
     e.preventDefault();
     brushFrom = p;
     canvasHost.setPointerCapture(e.pointerId);
@@ -195,10 +193,12 @@
   const wheel = (e: WheelEvent) => {
     e.preventDefault();
     const r = canvasHost.getBoundingClientRect();
-    engine?.wheel(e.clientX - r.left, e.clientY - r.top, e.deltaY);
+    engine?.wheel(e.clientX - r.left, e.clientY - r.top, e.deltaY, e.shiftKey);
   };
 
   const fmt = (x: number | undefined, d = 1) => (x === undefined || !isFinite(x) ? '–' : x.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }));
+  const usd = (v: number) => (v >= 1e9 ? `$${(v / 1e9).toFixed(1)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}k` : `$${v.toFixed(0)}`);
+  const px = (p: number) => p.toLocaleString(undefined, { maximumSignificantDigits: 6 });
   const int = (x: number | undefined) => (x === undefined ? '–' : Math.round(x).toLocaleString());
 
   let totals = $derived.by(() => {
@@ -307,6 +307,41 @@
     persist();
   }
   function setFont() { engine?.setFont(fontPx); persist(); }
+  /**
+   * Drag the candle chart's price axis (vertical zoom: up = in) or its time
+   * strip (horizontal zoom: right = in). Double-click resets that axis.
+   */
+  function axisDrag(e: PointerEvent, axis: 'x' | 'y') {
+    e.stopPropagation();
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    let last = axis === 'y' ? e.clientY : e.clientX, pend = 0, raf = 0;
+    const flush = () => { raf = 0; if (pend) engine?.candleScale(axis, Math.exp(pend / 120)); pend = 0; };
+    const move = (ev: PointerEvent) => {
+      const cur = axis === 'y' ? ev.clientY : ev.clientX;
+      pend += axis === 'y' ? last - cur : cur - last;
+      last = cur;
+      if (!raf) raf = requestAnimationFrame(flush); // one zoom message per frame
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
+      if (raf) { cancelAnimationFrame(raf); flush(); }
+    };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  }
+  function axisWheel(e: WheelEvent, axis: 'x' | 'y') {
+    e.preventDefault();
+    e.stopPropagation();
+    engine?.candleScale(axis, e.deltaY > 0 ? 1 / 1.15 : 1.15);
+  }
+  function axisKey(e: KeyboardEvent, axis: 'x' | 'y') {
+    const f = { ArrowUp: 1.15, ArrowRight: 1.15, ArrowDown: 1 / 1.15, ArrowLeft: 1 / 1.15, Home: 0 }[e.key];
+    if (f === undefined) return;
+    e.preventDefault();
+    engine?.candleScale(axis, f);
+  }
+
   function resetView() {
     const d = defaultPrefs();
     setLayout(d.layout);
@@ -314,7 +349,7 @@
     fontPx = d.fontPx;
     engine?.setFont(fontPx);
     for (const p of ['ladder', 'depth', 'candles'] as ZoomPane[]) engine?.zoom(p, 0);
-    zoomState = { candlesVisible: d.candlesVisible, depthRangePct: d.depthRangePct, ladderRowPad: d.ladderRowPad };
+    zoomState = { candlesVisible: d.candlesVisible, depthRangePct: d.depthRangePct, ladderRowPad: d.ladderRowPad, candlesPriceScale: d.candlesPriceScale };
     persist();
   }
 </script>
@@ -381,6 +416,18 @@
           {#if win}<button title="Search the whole history again" onclick={clearWindow}>clear</button>{/if}
           <button title="Explain the detected patterns in plain words" onclick={openExplanation}>explain</button>
         </div>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
+        <div class="axis y" role="slider" tabindex="0" aria-label="Candle chart vertical zoom" aria-valuemin={ZOOM.priceScale.min} aria-valuemax={ZOOM.priceScale.max} aria-valuenow={zoomState.candlesPriceScale}
+          title="Drag up or down to zoom prices. Double-click to fit."
+          style="left:{c.x + c.w - CANDLE_AXIS_W}px; top:{c.y + PANE_HEADER}px; width:{CANDLE_AXIS_W}px; height:{c.h - PANE_HEADER - CANDLE_TIME_H}px"
+          onpointerdown={(e) => axisDrag(e, 'y')} onwheel={(e) => axisWheel(e, 'y')} onkeydown={(e) => axisKey(e, 'y')}
+          ondblclick={() => engine?.candleScale('y', 0)} onclick={(e) => e.stopPropagation()}></div>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
+        <div class="axis x" role="slider" tabindex="0" aria-label="Candle chart horizontal zoom" aria-valuemin={ZOOM.candles.min} aria-valuemax={ZOOM.candles.max} aria-valuenow={zoomState.candlesVisible}
+          title="Drag left or right to zoom time. Double-click to reset."
+          style="left:{c.x}px; top:{c.y + c.h - CANDLE_TIME_H}px; width:{c.w - CANDLE_AXIS_W}px; height:{CANDLE_TIME_H}px"
+          onpointerdown={(e) => axisDrag(e, 'x')} onwheel={(e) => axisWheel(e, 'x')} onkeydown={(e) => axisKey(e, 'x')}
+          ondblclick={() => engine?.candleScale('x', 0)} onclick={(e) => e.stopPropagation()}></div>
         {#if panes.narrow}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
           <div class="split h" role="separator" aria-orientation="horizontal" aria-label="Resize order book" tabindex="0" aria-valuemin={5} aria-valuemax={95} aria-valuenow={Math.round(layoutPrefs[panes.narrow ? 'narrow' : 'wide']['ladder'] * 100)}
@@ -475,6 +522,22 @@
       </section>
 
       <section>
+        <h2>Liquidation levels
+          <span class="pill" class:ok={stats?.liq?.status === 'live'} class:bad={/error|no /.test(stats?.liq?.status ?? '')}>{stats?.liq?.status ?? 'idle'}</span>
+          <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={() => { engine?.setSettings({ showLiquidations: showLiq }); syncUrl(); }} /> show</label>
+        </h2>
+        {#if stats?.liq}
+          <dl class="mono">
+            <dt>Largest long cluster</dt><dd>{stats.liq.long ? `${px(stats.liq.long.price)} · ${usd(stats.liq.long.notional)}` : '–'}</dd>
+            <dt>Largest short cluster</dt><dd>{stats.liq.short ? `${px(stats.liq.short.price)} · ${usd(stats.liq.short.notional)}` : '–'}</dd>
+            <dt>Liquidations seen</dt><dd>{int(stats.liq.liquidations)} · {usd(stats.liq.liquidatedNotional)}</dd>
+            <dt>Futures msgs / s</dt><dd>{int(stats.liq.msgsPerSec)}</dd>
+          </dl>
+        {/if}
+        <p class="dim small">Bands on the candles are estimated liquidation levels for the {stats?.liq?.symbol || '…'} Binance perpetual (Kraken spot has no liquidations), rescaled to this chart's price: green is light, yellow and red are heavy, and the hottest levels are labelled. Built from {stats?.liq?.source === 'volume estimate' ? 'trade volume (open interest was not reachable)' : 'open interest changes'} and an assumed 10–100× leverage mix over {int(stats?.liq?.bars)} bars{#if stats?.liq?.backfillMs}{' '}(history rebuilt in {fmt(stats.liq.backfillMs, 0)} ms){/if}. Squares are real liquidations: red longs, green shorts. Cluster prices are in USDT.</p>
+      </section>
+
+      <section>
         <h2>Candle signals
           <label class="tog"><input type="checkbox" bind:checked={showCandle} onchange={() => engine?.setSettings({ showCandlePatterns: showCandle })} /> show</label>
         </h2>
@@ -493,14 +556,13 @@
         <h2>Options</h2>
         <label class="tog"><input type="checkbox" bind:checked={reducedMotion} onchange={() => engine?.setSettings({ reducedMotion })} /> Reduce motion (no flashes)</label>
         <label class="tog"><input type="checkbox" bind:checked={showTable} /> Show text table</label>
-        <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={syncUrl} /> Liquidation heatmap</label>
         <label class="tog">Text size
           <select bind:value={fontPx} onchange={setFont}>
             {#each Array.from({ length: ZOOM.font.max - ZOOM.font.min + 1 }, (_, i) => ZOOM.font.min + i) as px}<option value={px}>{px}px</option>{/each}
           </select>
         </label>
         <button class="link" onclick={resetView}>Reset layout and zoom</button>
-        <p class="dim small">Scroll over a panel, or use its − + fit buttons, to zoom it. Drag the lines between panels to resize them (double-click one to reset it). Layout and zoom are remembered in this browser. Click a pattern label to select it.</p>
+        <p class="dim small">Scroll over a panel, or use its − + fit buttons, to zoom it. On the candles, drag the price axis to zoom prices and the strip under the chart to zoom time (or hold Shift while scrolling to zoom prices). Drag the lines between panels to resize them (double-click one to reset it). Layout and zoom are remembered in this browser. Click a pattern label to select it.</p>
       </section>
     </aside>
   </main>
@@ -522,12 +584,6 @@
         </article>
       {/each}
     </div>
-  {/if}
-
-  {#if showLiq}
-    {#key source}
-      <LiquidationHeatmap spot={liqSpot} mode={source === 'local' ? 'synthetic' : 'live'} {theme} />
-    {/key}
   {/if}
 
   <section class="table" class:sr-only={!showTable} aria-label="Order book table">
@@ -578,6 +634,10 @@
   .zoom { position: absolute; display: flex; justify-content: flex-end; gap: 2px; z-index: 2; }
   .zoom button { padding: 0 6px; height: 18px; line-height: 16px; font-size: 12px; min-width: 22px; background: var(--panel); color: var(--dim); }
   .zoom button:hover { color: var(--text); border-color: var(--dim); }
+  .axis { position: absolute; z-index: 2; touch-action: none; }
+  .axis.y { cursor: ns-resize; }
+  .axis.x { cursor: ew-resize; }
+  .axis:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
   .split { position: absolute; z-index: 3; touch-action: none; }
   .split.v { width: 8px; cursor: col-resize; }
   .split.h { height: 8px; cursor: row-resize; }

@@ -44,6 +44,8 @@ export interface LiqEvent {
 export interface MapOptions {
   bins?: number; // rows in the grid
   binBps?: number; // bin height in basis points of the anchor price
+  /** recentre when price comes within this share of the grid's edge (default 0.2) */
+  margin?: number;
 }
 
 export class LiqMap {
@@ -67,9 +69,12 @@ export class LiqMap {
   /** set after a recentre so a renderer knows its history rows moved */
   shifted = 0;
 
+  private margin: number;
+
   constructor(o: MapOptions = {}) {
     this.bins = o.bins ?? 480;
     this.binBps = o.binBps ?? 2.5;
+    this.margin = o.margin ?? 0.2;
     this.longs = new Float64Array(this.bins);
     this.shorts = new Float64Array(this.bins);
     this.vol = new Float64Array(this.bins);
@@ -91,10 +96,16 @@ export class LiqMap {
     this.origin = Math.floor(price / this.step - this.bins / 2) * this.step;
   }
 
-  /** Keep price in the middle 60% of the grid; returns rows shifted (+ = grid moved up). */
+  /** Fix the grid to cover [lo, hi] (e.g. a whole candle history plus room for leverage). */
+  setRange(lo: number, hi: number): void {
+    this.step = (hi - lo) / this.bins;
+    this.origin = lo;
+  }
+
+  /** Keep price away from the grid's edges; returns rows shifted (+ = grid moved up). */
   private recentre(price: number): number {
     const r = this.row(price);
-    const lo = this.bins * 0.2, hi = this.bins * 0.8;
+    const lo = this.bins * this.margin, hi = this.bins * (1 - this.margin);
     if (r >= lo && r < hi) return 0;
     const shift = r - Math.floor(this.bins / 2);
     for (const a of [this.longs, this.shorts, this.vol]) shiftArray(a, shift);

@@ -1,6 +1,6 @@
 import { allocView, sabSupported, H, LAD_ASK, LAD_BID, VIEW_LEN, seqRead, STATUS_NAMES } from '../shared/view';
 import { PAIRS, type Endpoints, type Interval, type Venue } from '../shared/config';
-import { MarketIndex, liveSymbols, type Catalog, type Market, type Resolved } from '../shared/pairs';
+import { MarketIndex, liveSymbols, splitLabel, type Catalog, type Market, type Resolved } from '../shared/pairs';
 import { Histogram, type HistSummary } from '../shared/hist';
 import type { FeedStats, RenderStats } from '../workers/protocol';
 import type { SceneSettings } from '../render/scene';
@@ -9,6 +9,7 @@ import type { LayoutPrefs } from '../render/layout';
 import type { WindowPicked, ZoomPane, ZoomState } from '../workers/protocol';
 import type { AnalysisWindow } from '../patterns/window';
 import type { Outcome } from '../patterns/detect';
+import type { LiqStats } from '../workers/liquidation.worker';
 import { armed, type Alert, type AlertHit } from '../alerts/alerts';
 
 export interface EngineOptions {
@@ -49,6 +50,7 @@ export interface Snapshot {
     /** the window the list was searched in (null: all history); candle open times; last price */
     window: AnalysisWindow | null; t: Float64Array; last: number; symbol: string;
   };
+  liq: LiqStats | null;
 }
 
 export interface LadderRow { price: number; qty: number; cum: number }
@@ -59,6 +61,8 @@ export class Engine {
   private feeds: Record<Venue, Worker>;
   private analytics: Worker;
   private render: Worker;
+  private liq: Worker;
+  private liqKey = '';
   private snap: Snapshot;
   private rafH = new Histogram();
   private loaf = { count: 0, blocking: 0, total: 0, longest: 0 };
@@ -91,11 +95,13 @@ export class Engine {
     };
     this.analytics = new Worker(new URL('../workers/analytics.worker.ts', import.meta.url), { type: 'module', name: 'analytics' });
     this.render = new Worker(new URL('../workers/render.worker.ts', import.meta.url), { type: 'module', name: 'render' });
-    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, t: new Float64Array(0), last: NaN, symbol: '' } };
+    this.liq = new Worker(new URL('../workers/liquidation.worker.ts', import.meta.url), { type: 'module', name: 'liquidations' });
+    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, t: new Float64Array(0), last: NaN, symbol: '' }, liq: null };
 
     const fr = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const fa = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const ar = new MessageChannel();
+    const lr = new MessageChannel();
     this.idx = { kraken: new MarketIndex(o.catalog.kraken), binance: new MarketIndex(o.catalog.binance) };
 
     for (const v of ['kraken', 'binance'] as Venue[]) {
@@ -130,9 +136,16 @@ export class Engine {
     this.render.postMessage({
       type: 'init', canvas: off, w: rect.width, h: rect.height, dpr: devicePixelRatio,
       views: { kraken: this.views.kraken.buffer, binance: this.views.binance.buffer }, shared: this.shared,
-      feedPorts: { kraken: fr.kraken.port2, binance: fr.binance.port2 }, analyticsPort: ar.port2,
+      feedPorts: { kraken: fr.kraken.port2, binance: fr.binance.port2 }, analyticsPort: ar.port2, liqPort: lr.port2,
       settings: o.settings, theme: o.theme, layout: o.layout, fontPx: o.fontPx,
-    }, [off, fr.kraken.port2, fr.binance.port2, ar.port2]);
+    }, [off, fr.kraken.port2, fr.binance.port2, ar.port2, lr.port2]);
+    this.liq.onmessage = (e) => { if (e.data.type === 'liqStats') this.snap.liq = e.data; };
+    this.liq.postMessage({
+      type: 'init', renderPort: lr.port1,
+      futuresWs: o.endpoints.futuresWs ?? 'wss://fstream.binance.com',
+      futuresRest: o.endpoints.futuresRest ?? 'https://fapi.binance.com',
+      spotRest: o.endpoints.binanceRest,
+    }, [lr.port1]);
     this.render.onmessage = (e) => {
       if (e.data.type === 'stats') this.snap.render = e.data;
       else if (e.data.type === 'selected') this.onSelected(e.data.id);
@@ -227,6 +240,13 @@ export class Engine {
     const label = here ? `${here.base}/${here.quote}` : this.o.pair;
     this.analytics.postMessage({ type: 'venue', venue: this.o.venue });
     this.render.postMessage({ type: 'venue', venue: this.o.venue });
+    // liquidation levels follow the pair's base asset on Binance futures, whatever the venue
+    const base = r.binance?.base ?? r.kraken?.base ?? splitLabel(this.o.pair)?.base ?? null;
+    const key = `${base}:${this.o.interval}`;
+    if (key !== this.liqKey) {
+      this.liqKey = key;
+      this.liq.postMessage({ type: 'focus', base, interval: this.o.interval });
+    }
     this.render.postMessage({ type: 'settings', settings: { venueLabel: this.o.venue.toUpperCase(), pairLabel: label } });
   }
 
@@ -274,7 +294,9 @@ export class Engine {
   resize(w: number, h: number): void { this.render.postMessage({ type: 'resize', w, h, dpr: devicePixelRatio }); }
   pointer(x: number, y: number, inside: boolean): void { this.render.postMessage({ type: 'pointer', x, y, in: inside }); }
   click(x: number, y: number): void { this.render.postMessage({ type: 'click', x, y }); }
-  wheel(x: number, y: number, dy: number): void { this.render.postMessage({ type: 'wheel', x, y, dy }); }
+  wheel(x: number, y: number, dy: number, shift = false): void { this.render.postMessage({ type: 'wheel', x, y, dy, shift }); }
+  /** Zoom one candle chart axis by `factor` (>1 = in), or reset it with 0. */
+  candleScale(axis: 'x' | 'y', factor: number): void { this.render.postMessage({ type: 'candleScale', axis, factor }); }
   zoom(pane: ZoomPane, dir: 1 | -1 | 0): void { this.render.postMessage({ type: 'zoom', pane, dir }); }
   setLayout(layout: LayoutPrefs): void { this.o.layout = layout; this.render.postMessage({ type: 'layout', layout }); }
   setFont(px: number): void { this.o.fontPx = px; this.render.postMessage({ type: 'font', px }); }
@@ -304,6 +326,6 @@ export class Engine {
     cancelAnimationFrame(this.rafId);
     this.observer?.disconnect();
     for (const t of this.timers) clearInterval(t);
-    for (const w of [...Object.values(this.feeds), this.analytics, this.render]) w.terminate();
+    for (const w of [...Object.values(this.feeds), this.analytics, this.render, this.liq]) w.terminate();
   }
 }

@@ -324,7 +324,7 @@ export class Gfx {
    * drawn: the drawing buffer is preserved, so panes that did not change keep
    * last frame's pixels and cost nothing.
    */
-  end(bg: RGBA, clip?: { x: number; y: number; w: number; h: number }): void {
+  end(bg: RGBA, clip?: { x: number; y: number; w: number; h: number }, clear = true): void {
     const gl = this.gl;
     let q: WebGLQuery | null = null;
     if (this.timer) {
@@ -350,8 +350,10 @@ export class Gfx {
       gl.enable(gl.SCISSOR_TEST);
       gl.scissor(x, gl.drawingBufferHeight - y - h, w, h);
     }
-    gl.clearColor(((bg) & 255) / 255, ((bg >> 8) & 255) / 255, ((bg >> 16) & 255) / 255, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (clear) {
+      gl.clearColor(((bg) & 255) / 255, ((bg >> 8) & 255) / 255, ((bg >> 16) & 255) / 255, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
 
     if (this.shapes.n) {
       gl.useProgram(this.shapeProg);
