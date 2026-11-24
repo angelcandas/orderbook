@@ -73,9 +73,10 @@ export type RenderCmd =
   | { type: 'brush'; x0: number; y0: number; x1: number; y1: number; phase: 'move' | 'end' | 'cancel' }
   /** dir: +1 zoom in, -1 zoom out, 0 back to the default */
   | { type: 'zoom'; pane: ZoomPane; dir: 1 | -1 | 0 }
-  /** candle chart axis zoom: multiply by factor (>1 zooms in); factor 0 resets that axis */
-  | { type: 'candleScale'; axis: 'x' | 'y'; factor: number }
-  | { type: 'wheel'; x: number; y: number; dy: number; shift?: boolean }
+  /** axis zoom (candle time / price, depth price): multiply by factor (>1 zooms in); factor 0 resets that axis */
+  | { type: 'axisScale'; axis: 'x' | 'y' | 'depth'; factor: number }
+  /** scroll deltas in css px; pinch = a trackpad pinch (ctrl + wheel) */
+  | { type: 'wheel'; x: number; y: number; dx: number; dy: number; pinch: boolean }
   | { type: 'layout'; layout: LayoutPrefs }
   | { type: 'font'; px: number }
   | { type: 'settings'; settings: Partial<SceneSettings> }

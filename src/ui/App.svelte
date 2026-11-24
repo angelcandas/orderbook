@@ -3,7 +3,7 @@
   import { Engine, type Snapshot, type LadderRow } from './engine';
   import { INTERVALS, LIVE, intervalLabel, isInterval, localEndpoints, type Interval, type Venue } from '../shared/config';
   import Indicators from './Indicators.svelte';
-  import type { IndConfig } from '../indicators/spec';
+  import { MAX_SUB_PANES, SPECS, type IndConfig } from '../indicators/spec';
   import {
     allPairs, builtinCatalog, loadCachedCatalog, loadFavourites, MarketIndex, quoteRanking,
     saveCachedCatalog, saveFavourites, splitLabel, toggleFavourite, type Catalog,
@@ -15,8 +15,8 @@
   import { explain, explanationText, type Explanation } from '../patterns/explain';
   import Alerts from './Alerts.svelte';
   import { midOf } from '../alerts/alerts';
-  import { HEADER_CTRL_W, CANDLE_AXIS_W, CANDLE_TIME_H, CANDLE_TOOLS_W, PANE_HEADER } from '../render/scene';
-  import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs } from '../render/layout';
+  import { HEADER_CTRL_W, CANDLE_AXIS_W, CANDLE_TIME_H, CANDLE_TOOLS_W, PANE_HEADER, DEPTH_AXIS_H, candleGeom } from '../render/scene';
+  import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs, type Rect } from '../render/layout';
   import type { ZoomPane } from '../workers/protocol';
   import { loadPrefs, savePrefs, defaultPrefs, loadChartPrefs, saveChartPrefs, SIDE_W, type ViewPrefs } from './prefs';
 
@@ -44,6 +44,12 @@
   let showCandle = $state(chartSaved.showCandlePatterns);
   let indicators = $state.raw<IndConfig[]>(chartSaved.indicators);
   let indMenu = $state(false);
+  // lower panes and the volume strip change the candle pane's geometry (the axis handles follow it)
+  let indPanes = $derived({
+    sub: Math.min(MAX_SUB_PANES, indicators.filter((c) => c.on && SPECS[c.kind].pane === 'sub').length),
+    vol: indicators.some((c) => c.on && c.kind === 'volume'),
+  });
+  const geom = (c: Rect) => candleGeom(c, indPanes.sub, indPanes.vol);
   let reducedMotion = $state(matchMedia('(prefers-reduced-motion: reduce)').matches);
   let showTable = $state(false);
   let showLiq = $state(q.has('liq') ? q.get('liq') !== '0' : chartSaved.showLiquidations);
@@ -156,7 +162,7 @@
     if (!panes || e.button !== 0 || !(drawMode || e.shiftKey)) return;
     const p = local(e), c = panes.candles;
     // the plot only: not the header buttons or the price / time axis zoom handles
-    if (p.x < c.x || p.x > c.x + c.w - CANDLE_AXIS_W || p.y < c.y + PANE_HEADER || p.y > c.y + c.h - CANDLE_TIME_H) return;
+    if (p.x < c.x || p.x > c.x + c.w - CANDLE_AXIS_W || p.y < c.y + PANE_HEADER || p.y > geom(c).timeY) return;
     e.preventDefault();
     brushFrom = p;
     canvasHost.setPointerCapture(e.pointerId);
@@ -203,10 +209,14 @@
     const r = canvasHost.getBoundingClientRect();
     engine?.click(e.clientX - r.left, e.clientY - r.top);
   };
+  // scrolling pans (two-finger trackpad scroll moves both ways); a pinch, which arrives with ctrl held, zooms
   const wheel = (e: WheelEvent) => {
     e.preventDefault();
     const r = canvasHost.getBoundingClientRect();
-    engine?.wheel(e.clientX - r.left, e.clientY - r.top, e.deltaY, e.shiftKey);
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? r.height : 1; // lines / pages to px
+    let dx = e.deltaX * k, dy = e.deltaY * k;
+    if (e.shiftKey && !dx) { dx = dy; dy = 0; } // shift + mouse wheel scrolls sideways
+    engine?.wheel(e.clientX - r.left, e.clientY - r.top, dx, dy, e.ctrlKey);
   };
 
   const fmt = (x: number | undefined, d = 1) => (x === undefined || !isFinite(x) ? '–' : x.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }));
@@ -324,13 +334,13 @@
    * Drag the candle chart's price axis (vertical zoom: up = in) or its time
    * strip (horizontal zoom: right = in). Double-click resets that axis.
    */
-  function axisDrag(e: PointerEvent, axis: 'x' | 'y') {
+  function axisDrag(e: PointerEvent, axis: 'x' | 'y' | 'depth') {
     e.stopPropagation();
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     let last = axis === 'y' ? e.clientY : e.clientX, pend = 0, raf = 0;
-    const flush = () => { raf = 0; if (pend) engine?.candleScale(axis, Math.exp(pend / 120)); pend = 0; };
+    const flush = () => { raf = 0; if (pend) engine?.axisScale(axis, Math.exp(pend / 120)); pend = 0; };
     const move = (ev: PointerEvent) => {
       const cur = axis === 'y' ? ev.clientY : ev.clientX;
       pend += axis === 'y' ? last - cur : cur - last;
@@ -343,16 +353,16 @@
     };
     el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
   }
-  function axisWheel(e: WheelEvent, axis: 'x' | 'y') {
+  function axisWheel(e: WheelEvent, axis: 'x' | 'y' | 'depth') {
     e.preventDefault();
     e.stopPropagation();
-    engine?.candleScale(axis, e.deltaY > 0 ? 1 / 1.15 : 1.15);
+    engine?.axisScale(axis, e.deltaY > 0 ? 1 / 1.15 : 1.15);
   }
-  function axisKey(e: KeyboardEvent, axis: 'x' | 'y') {
+  function axisKey(e: KeyboardEvent, axis: 'x' | 'y' | 'depth') {
     const f = { ArrowUp: 1.15, ArrowRight: 1.15, ArrowDown: 1 / 1.15, ArrowLeft: 1 / 1.15, Home: 0 }[e.key];
     if (f === undefined) return;
     e.preventDefault();
-    engine?.candleScale(axis, f);
+    engine?.axisScale(axis, f);
   }
 
   function resetView() {
@@ -423,6 +433,14 @@
           </div>
         {/each}
         {@const c = panes.candles}
+        {@const cg = geom(c)}
+        {@const d = panes.depth}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
+        <div class="axis x" role="slider" tabindex="0" aria-label="Depth chart price range zoom" aria-valuemin={ZOOM.depthPct.min} aria-valuemax={ZOOM.depthPct.max} aria-valuenow={zoomState.depthRangePct}
+          title="Drag left or right to zoom the price range. Double-click to auto-fit."
+          style="left:{d.x}px; top:{d.y + d.h - DEPTH_AXIS_H}px; width:{d.w - 60}px; height:{DEPTH_AXIS_H}px"
+          onpointerdown={(e) => axisDrag(e, 'depth')} onwheel={(e) => axisWheel(e, 'depth')} onkeydown={(e) => axisKey(e, 'depth')}
+          ondblclick={() => engine?.axisScale('depth', 0)} onclick={(e) => e.stopPropagation()}></div>
         <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
         <div class="zoom wintools" role="group" aria-label="Pattern analysis window and indicators" style="left:{c.x + c.w - HEADER_CTRL_W - CANDLE_TOOLS_W}px; top:{c.y + 2}px; width:{CANDLE_TOOLS_W - 4}px" onclick={(e) => e.stopPropagation()}>
           <button class:on={indMenu} aria-expanded={indMenu} title="Add, remove and configure indicators" onclick={() => (indMenu = !indMenu)}>indicators</button>
@@ -441,15 +459,15 @@
         <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
         <div class="axis y" role="slider" tabindex="0" aria-label="Candle chart vertical zoom" aria-valuemin={ZOOM.priceScale.min} aria-valuemax={ZOOM.priceScale.max} aria-valuenow={zoomState.candlesPriceScale}
           title="Drag up or down to zoom prices. Double-click to fit."
-          style="left:{c.x + c.w - CANDLE_AXIS_W}px; top:{c.y + PANE_HEADER}px; width:{CANDLE_AXIS_W}px; height:{c.h - PANE_HEADER - CANDLE_TIME_H}px"
+          style="left:{c.x + c.w - CANDLE_AXIS_W}px; top:{c.y + PANE_HEADER}px; width:{CANDLE_AXIS_W}px; height:{cg.timeY - c.y - PANE_HEADER}px"
           onpointerdown={(e) => axisDrag(e, 'y')} onwheel={(e) => axisWheel(e, 'y')} onkeydown={(e) => axisKey(e, 'y')}
-          ondblclick={() => engine?.candleScale('y', 0)} onclick={(e) => e.stopPropagation()}></div>
+          ondblclick={() => engine?.axisScale('y', 0)} onclick={(e) => e.stopPropagation()}></div>
         <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
         <div class="axis x" role="slider" tabindex="0" aria-label="Candle chart horizontal zoom" aria-valuemin={ZOOM.candles.min} aria-valuemax={ZOOM.candles.max} aria-valuenow={zoomState.candlesVisible}
           title="Drag left or right to zoom time. Double-click to reset."
-          style="left:{c.x}px; top:{c.y + c.h - CANDLE_TIME_H}px; width:{c.w - CANDLE_AXIS_W}px; height:{CANDLE_TIME_H}px"
+          style="left:{c.x}px; top:{cg.timeY}px; width:{c.w - CANDLE_AXIS_W}px; height:{CANDLE_TIME_H}px"
           onpointerdown={(e) => axisDrag(e, 'x')} onwheel={(e) => axisWheel(e, 'x')} onkeydown={(e) => axisKey(e, 'x')}
-          ondblclick={() => engine?.candleScale('x', 0)} onclick={(e) => e.stopPropagation()}></div>
+          ondblclick={() => engine?.axisScale('x', 0)} onclick={(e) => e.stopPropagation()}></div>
         {#if panes.narrow}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
           <div class="split h" role="separator" aria-orientation="horizontal" aria-label="Resize order book" tabindex="0" aria-valuemin={5} aria-valuemax={95} aria-valuenow={Math.round(layoutPrefs[panes.narrow ? 'narrow' : 'wide']['ladder'] * 100)}
@@ -589,7 +607,7 @@
           </select>
         </label>
         <button class="link" onclick={resetView}>Reset layout and zoom</button>
-        <p class="dim small">Scroll over a panel, or use its − + fit buttons, to zoom it. On the candles, drag the price axis to zoom prices and the strip under the chart to zoom time (or hold Shift while scrolling to zoom prices). Drag the lines between panels to resize them (double-click one to reset it). Layout and zoom are remembered in this browser. Click a pattern label to select it.</p>
+        <p class="dim small">Scroll (two fingers on a trackpad) to move around the candles, sideways through time and up or down in price; scroll sideways on the depth chart to move its price range. Pinch, the − + fit buttons, or dragging an axis zoom: the price axis on the right of the candles, the time strip just under them, and the price strip under the depth chart. Double-click an axis to reset it; fit resets the whole panel and returns to live. Drag the lines between panels to resize them (double-click one to reset it). Layout and zoom are remembered in this browser. Click a pattern label to select it.</p>
       </section>
     </aside>
   </main>

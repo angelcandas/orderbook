@@ -13,6 +13,12 @@ export interface SceneSettings {
   candlesVisible: number;
   /** vertical zoom of the candle chart: 1 = fit the visible candles, >1 = zoomed in */
   candlesPriceScale?: number;
+  /** candles scrolled back from the newest, in bars (0 = following live) */
+  candlesOffset?: number;
+  /** vertical pan of the candle chart, in visible price ranges (0 = centred on the fit) */
+  candlesPricePan?: number;
+  /** horizontal pan of the depth chart's centre away from the mid, percent */
+  depthShiftPct?: number;
   /** extra px between ladder rows on top of the text height: the ladder's zoom */
   ladderRowPad?: number;
   reducedMotion: boolean;
@@ -36,9 +42,28 @@ const HEADER = 22;
 /** px kept free at the right of each pane header for the zoom buttons drawn over it */
 export const HEADER_CTRL_W = 92;
 /** candle chart price axis width and time strip height, css px (the page puts drag handles on them) */
-export const CANDLE_AXIS_W = 70, CANDLE_TIME_H = 24, PANE_HEADER = HEADER;
-/** px of the candle header taken by the page's window / explain / indicators buttons */
+export const CANDLE_AXIS_W = 70, CANDLE_TIME_H = 18, PANE_HEADER = HEADER;
+/** px of the candle header taken by the page's indicators / window / explain buttons */
 export const CANDLE_TOOLS_W = 320;
+
+/**
+ * Where things sit inside the candle pane: price plot, the time strip right
+ * under it, volume, then one pane per oscillator indicator (`nSub`). Shared with
+ * the page, which puts the axis handles on it.
+ */
+export function candleGeom(r: Rect, nSub = 0, vol = true) {
+  const axisW = CANDLE_AXIS_W;
+  const subH = subPaneHeight(r.h - HEADER - 10 - CANDLE_TIME_H - 6, nSub);
+  const volH = vol ? Math.round((r.h - HEADER - subH * nSub) * 0.14) : 0;
+  const px = r.x + 8, pw = r.w - 16 - axisW;
+  const py = r.y + HEADER + 10;
+  const ph = Math.max(10, r.h - HEADER - 10 - CANDLE_TIME_H - volH - 6 - subH * nSub);
+  const volBase = py + ph + CANDLE_TIME_H + 2 + volH;
+  const subY = volBase + 2;
+  return { axisW, volH, px, pw, py, ph, timeY: py + ph, volBase, subY, subH, bottom: subY + subH * nSub };
+}
+/** The depth chart's price axis strip at the bottom of its pane, css px tall. */
+export const DEPTH_AXIS_H = 22;
 
 /**
  * Draws the whole market view into one WebGL2 canvas: ladder (left), depth
@@ -108,6 +133,33 @@ export class Scene {
       g.end(t.bg, this.candles, !cleared);
     }
     return anim;
+  }
+
+  /** Time labels in the strip under the price plot, about one per 90 px. */
+  private timeAxis(times: Float64Array, first: number, end: number, X: (i: number) => number, px: number, pw: number, y: number, t: Theme): void {
+    const g = this.g;
+    g.rect(px, y, pw, 1, t.grid);
+    const n = end - first;
+    if (n < 2) return;
+    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(pw / 90))));
+    const span = times[end - 1] - times[first];
+    const long = span > 36 * 3600e3; // more than a day and a half: show the date too
+    const ty = y + (CANDLE_TIME_H - g.atlas.cellH) / 2;
+    for (let i = end - 1; i >= first; i -= every) {
+      const d = new Date(times[i]);
+      const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const lbl = long ? `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}` : hm;
+      const x = X(i) - (lbl.length * g.atlas.cellW) / 2;
+      if (x < px || x + lbl.length * g.atlas.cellW > px + pw) continue;
+      g.rect(X(i), y, 1, 3, t.grid);
+      g.text(x, ty, lbl, t.dim);
+    }
+  }
+
+  /** Bar width in px and price plot height of the last candle draw, for scroll panning. */
+  candleScroll(): { step: number; ph: number; pw: number; n: number } | null {
+    const m = this.cmap;
+    return m ? { step: m.step, ph: m.ph, pw: m.pw, n: m.t.length } : null;
   }
 
   /** Turn a box dragged in px into candle times and prices, or null if it spans fewer than 3 candles. */
@@ -278,8 +330,9 @@ export class Scene {
       pct = Math.max(0.01, Math.min(20, (reach / mid) * 100 * 0.95));
     }
     this.depthPct = pct;
-    const lo = mid * (1 - pct / 100);
-    const hi = mid * (1 + pct / 100);
+    const ctr = mid * (1 + (s.depthShiftPct ?? 0) / 100);
+    const lo = ctr - mid * pct / 100;
+    const hi = ctr + mid * pct / 100;
     const px = r.x + 8, pw = r.w - 16 - 60;
     const py = r.y + HEADER + 8, ph = r.h - HEADER - 8 - 22;
     const X = (p: number) => px + ((p - lo) / (hi - lo)) * pw;
@@ -400,30 +453,28 @@ export class Scene {
       return false;
     }
     const N = a.c.length;
-    const vis = Math.max(20, Math.min(N, s.candlesVisible));
-    const first = N - vis;
-    const axisW = CANDLE_AXIS_W;
-    const px = r.x + 8, pw = r.w - 16 - axisW;
-    // stacked top to bottom: price plot, volume strip, one pane per oscillator, time strip
+    const vis = Math.max(Math.min(20, N), Math.min(N, Math.round(s.candlesVisible)));
+    // scrolled back: the view ends `off` bars before the newest
+    const off = Math.max(0, Math.min(N - vis, Math.round(s.candlesOffset ?? 0)));
+    const end = N - off;
+    const first = end - vis;
     const ind = a.ind ?? [];
     let nSub = 0, vol: IndOut | null = null;
     for (const x of ind) { if (x.pane === 'sub') nSub++; else if (x.pane === 'volume') vol = x; }
-    const py = r.y + HEADER + 10;
-    const avail = r.h - HEADER - 10 - CANDLE_TIME_H;
-    const subH = subPaneHeight(avail, nSub);
-    const volH = vol ? Math.round((avail - subH * nSub) * 0.14) : 0;
-    const ph = avail - subH * nSub - volH;
+    const { axisW, volH, px, pw, py, ph, timeY, volBase, subY, subH, bottom } = candleGeom(r, nSub, !!vol);
     let lo = Infinity, hi = -Infinity;
-    for (let i = first; i < N; i++) {
+    for (let i = first; i < end; i++) {
       if (a.l[i] < lo) lo = a.l[i];
       if (a.h[i] > hi) hi = a.h[i];
     }
     const pad = (hi - lo) * 0.08 || hi * 0.001;
     lo -= pad; hi += pad;
     const ys = s.candlesPriceScale ?? 1;
-    if (ys !== 1 && ys > 0) {
-      // scale about the middle of the fitted range
-      const c = (lo + hi) / 2, half = (hi - lo) / 2 / ys;
+    const pan = s.candlesPricePan ?? 0;
+    if ((ys !== 1 && ys > 0) || pan) {
+      // scale about the middle of the fitted range, then pan by whole view heights
+      const half = (hi - lo) / 2 / (ys > 0 ? ys : 1);
+      const c = (lo + hi) / 2 + pan * 2 * half;
       lo = c - half; hi = c + half;
     }
     this.candlePlot.x = r.x + 1; this.candlePlot.y = py; this.candlePlot.w = r.w - axisW - 1; this.candlePlot.h = ph;
@@ -432,11 +483,10 @@ export class Scene {
     const X = (i: number) => px + (i - first + 0.5) * step;
     const Y = (p: number) => py + ((hi - p) / (hi - lo)) * ph;
     const pd = v[H.priceDecimals] | 0;
-    const xm: XMap = { first, N, step, bw, X };
-    const volBase = py + ph + volH, chartBottom = volBase + subH * nSub;
-    const inChart = ptr.in && ptr.x >= px && ptr.x <= px + pw && ptr.y >= py && ptr.y <= chartBottom;
-    const hover = inChart ? Math.min(N - 1, Math.max(first, first + Math.floor((ptr.x - px) / step))) : -1;
-    this.cmap = { first, N, step, px, pw, py, ph, lo, hi, t: a.t };
+    const xm: XMap = { first, N: end, step, bw, X };
+    const inChart = ptr.in && ptr.x >= px && ptr.x <= px + pw && ptr.y >= py && ptr.y <= bottom;
+    const hover = inChart ? Math.min(end - 1, Math.max(first, first + Math.floor((ptr.x - px) / step))) : -1;
+    this.cmap = { first, N: end, step, px, pw, py, ph, lo, hi, t: a.t };
     // grid + axis
     for (let k = 0; k <= 5; k++) {
       const p = lo + ((hi - lo) * k) / 5;
@@ -444,9 +494,10 @@ export class Scene {
       g.rect(px, y, pw, 1, t.grid);
       g.number(r.x + r.w - 8, y - g.atlas.cellH / 2, p, pd, t.dim, false);
     }
-    if (s.showLiquidations !== false) this.liq.draw(g, a, first, N, step, X, Y, lo, hi, py, ph, px + pw - 4, t);
-    if (vol) drawVolume(g, vol, a.o, a.c, a.v, xm, py + ph, volH, t);
-    let sy = volBase;
+    if (s.showLiquidations !== false) this.liq.draw(g, a, first, end, step, X, Y, lo, hi, py, ph, px + pw - 4, t);
+    this.timeAxis(a.t, first, end, X, px, pw, timeY, t);
+    if (vol) drawVolume(g, vol, a.o, a.c, a.v, xm, volBase - volH, volH, t);
+    let sy = subY;
     for (const x of ind) {
       if (x.pane !== 'sub') continue;
       this.subRect.x = px; this.subRect.y = sy; this.subRect.w = pw; this.subRect.h = subH;
@@ -467,7 +518,7 @@ export class Scene {
 
     // ---- price content, clipped to the plot ----
     g.begin();
-    for (let i = first; i < N; i++) {
+    for (let i = first; i < end; i++) {
       const col = a.c[i] >= a.o[i] ? t.bid : t.ask;
       const x = X(i);
       g.rect(x - 0.5, Y(a.h[i]), 1, Math.max(1, Y(a.l[i]) - Y(a.h[i])), col);
@@ -508,7 +559,7 @@ export class Scene {
     let labelRow = 0;
     for (const p of a.patterns) {
       if (p.family === 'chart' ? !s.showChartPatterns : !s.showCandlePatterns) continue;
-      if (p.end < first) continue;
+      if (p.end < first || p.start >= end) continue;
       const sel = s.selectedPattern === p.id;
       const col = p.bias > 0 ? t.bull : p.bias < 0 ? t.bear : t.neutral;
       if (p.family !== 'chart') {
@@ -565,7 +616,7 @@ export class Scene {
     g.begin();
     if (hover >= 0) {
       const i = hover;
-      g.rect(X(i), py, 1, chartBottom - py, withAlpha(t.text, 0.3));
+      g.rect(X(i), py, 1, bottom - py, withAlpha(t.text, 0.3));
       g.rect(px, ptr.y, pw, 1, withAlpha(t.text, 0.3));
       const y = r.y + HEADER + 2;
       let x = r.x + r.w - axisW - 8 - 60 * g.atlas.cellW;
