@@ -12,8 +12,12 @@
     resolve: (venue: Venue, label: string) => Resolved | null;
     onpick: (label: string) => void;
     onfavourite: (label: string) => void;
+    /** favourite chips next to the button (the app may show them elsewhere) */
+    showFavs?: boolean;
   }
-  let { pair, entries, quotes, favourites, venue, resolve, onpick, onfavourite }: Props = $props();
+  let { pair, entries, quotes, favourites, venue, resolve, onpick, onfavourite, showFavs = true }: Props = $props();
+  /** Open the search (keyboard shortcut). */
+  export function show(): void { if (!open) toggle(); }
   const VENUES: [Venue, string, string][] = [['kraken', 'K', 'Kraken'], ['binance', 'B', 'Binance']];
   function where(v: Venue, label: string, name: string): { cls: string; title: string } {
     const r = resolve(v, label);
@@ -79,15 +83,14 @@
 <svelte:window onpointerdown={outside} />
 
 <div class="picker" bind:this={root}>
-  <span class="lbl">Pair</span>
-  <button class="current" aria-haspopup="listbox" aria-expanded={open} onclick={toggle}>
+  <button class="current" aria-haspopup="listbox" aria-expanded={open} onclick={toggle} title="Search pairs ( / )" aria-label="Pair {pair}. Search pairs">
     <span class="mono">{pair}</span><span class="caret" aria-hidden="true">▾</span>
   </button>
   <button class="star" class:on={isFav(pair)} title={isFav(pair) ? 'Remove from favourites' : 'Add to favourites'}
     aria-label={isFav(pair) ? `Remove ${pair} from favourites` : `Add ${pair} to favourites`} aria-pressed={isFav(pair)}
     onclick={() => onfavourite(pair)}>{isFav(pair) ? '★' : '☆'}</button>
 
-  {#if favourites.length}
+  {#if showFavs && favourites.length}
     <div class="favs" role="group" aria-label="Favourite pairs">
       {#each favourites as f (f)}
         <button class="chip mono" class:on={f === pair} onclick={() => pick(f)}>{f}</button>
@@ -134,19 +137,21 @@
 </div>
 
 <style>
-  .picker { position: relative; display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .lbl { color: var(--dim); }
-  button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
-  .current { display: inline-flex; gap: 8px; align-items: center; min-width: 104px; justify-content: space-between; }
+  .picker { position: relative; display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+  button { font: inherit; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 4px 8px; cursor: pointer; }
+  button:hover { border-color: var(--line-strong); }
+  .current { display: inline-flex; gap: 8px; align-items: center; min-width: 112px; justify-content: space-between; height: 32px;
+    font-size: 15px; font-weight: 650; letter-spacing: 0.01em; background: transparent; border-color: transparent; padding: 4px 8px; }
+  .current:hover, .current[aria-expanded='true'] { background: var(--raised); border-color: var(--line); }
   .caret { color: var(--dim); font-size: 10px; }
-  .star { color: var(--dim); padding: 4px 7px; line-height: 1; }
+  .star { color: var(--dim); padding: 4px 7px; line-height: 1; background: transparent; border-color: transparent; }
   .star.on { color: var(--warn); }
   .star.sm { border: 0; background: none; padding: 2px 6px; }
   .favs { display: inline-flex; gap: 4px; flex-wrap: wrap; }
   .chip { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
   .chip.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-  .pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: min(340px, calc(100vw - 32px));
-    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.3); }
+  .pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: min(360px, calc(100vw - 32px));
+    background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 10px; box-shadow: var(--shadow-lg); }
   input { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
   input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .quotes { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 6px; }

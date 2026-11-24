@@ -1,21 +1,51 @@
+/*
+ * Design tokens. Surfaces step up in lightness (bg < panel < raised), text has
+ * three weights (text, dim, faint), and the market colours are shared with the
+ * canvas theme in src/render/theme.ts: keep the two in step.
+ */
 :root {
-  --bg: #0d1117; --panel: #121821; --line: #1f2630; --text: #d6dde6; --dim: #7d8796;
-  --bid: #2ebd85; --ask: #e5534b; --accent: #6ea8fe; --warn: #d4a72c;
+  --bg: #0b0e14; --panel: #10141b; --raised: #161b24; --hover: #1c2330;
+  --line: #222a36; --line-strong: #2f3947;
+  --text: #e3e8ef; --dim: #8b95a5; --faint: #5d6776;
+  --bid: #2ebd85; --ask: #e5534b; --accent: #5b9dff; --accent-ink: #06101f; --warn: #d4a72c;
+  --bid-soft: rgb(46 189 133 / 0.14); --ask-soft: rgb(229 83 75 / 0.14); --accent-soft: rgb(91 157 255 / 0.16);
+  --shadow-lg: 0 12px 40px rgb(0 0 0 / 0.45), 0 0 0 1px rgb(255 255 255 / 0.02);
+  --r-sm: 6px; --r-md: 8px; --r-lg: 12px;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme='dark']) {
-    --bg: #ffffff; --panel: #f6f8fa; --line: #e4e8ee; --text: #1f2328; --dim: #59636e;
-    --bid: #1a7f37; --ask: #cf222e; --accent: #0969da; --warn: #9a6700; color-scheme: light;
+    --bg: #ffffff; --panel: #f6f8fa; --raised: #ffffff; --hover: #eef1f5;
+    --line: #e3e7ed; --line-strong: #cfd5de;
+    --text: #1a1f26; --dim: #59636e; --faint: #8a939e;
+    --bid: #1a7f37; --ask: #cf222e; --accent: #0969da; --accent-ink: #ffffff; --warn: #9a6700;
+    --bid-soft: rgb(26 127 55 / 0.1); --ask-soft: rgb(207 34 46 / 0.1); --accent-soft: rgb(9 105 218 / 0.1);
+    --shadow-lg: 0 12px 32px rgb(31 35 40 / 0.14), 0 0 0 1px rgb(31 35 40 / 0.06);
+    color-scheme: light;
   }
 }
 :root[data-theme='light'] {
-  --bg: #ffffff; --panel: #f6f8fa; --line: #e4e8ee; --text: #1f2328; --dim: #59636e;
-  --bid: #1a7f37; --ask: #cf222e; --accent: #0969da; --warn: #9a6700; color-scheme: light;
+  --bg: #ffffff; --panel: #f6f8fa; --raised: #ffffff; --hover: #eef1f5;
+  --line: #e3e7ed; --line-strong: #cfd5de;
+  --text: #1a1f26; --dim: #59636e; --faint: #8a939e;
+  --bid: #1a7f37; --ask: #cf222e; --accent: #0969da; --accent-ink: #ffffff; --warn: #9a6700;
+  --bid-soft: rgb(26 127 55 / 0.1); --ask-soft: rgb(207 34 46 / 0.1); --accent-soft: rgb(9 105 218 / 0.1);
+  --shadow-lg: 0 12px 32px rgb(31 35 40 / 0.14), 0 0 0 1px rgb(31 35 40 / 0.06);
+  color-scheme: light;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-  font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased; }
 #app { height: 100%; }
-.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* one focus ring everywhere, only for keyboard users */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+:focus:not(:focus-visible) { outline: none; }
+::selection { background: var(--accent-soft); }
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; background: var(--raised); color: var(--text); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

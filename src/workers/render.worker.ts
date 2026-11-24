@@ -27,6 +27,7 @@ const ptr = { x: 0, y: 0, in: false };
 let dirty = PANE_ALL;
 let lastCandleDraw = 0;
 let lastPtrPane = 0;
+const COUNTDOWN_MS = 1000;
 const PRICE_LINE_MS = 100; // the live price line on the candle chart refreshes at 10 Hz
 let animating = false;
 let lastVersion = -1;
@@ -61,6 +62,8 @@ function frame(ts: number): void {
   if (changed) dirty |= PANE_LADDER | PANE_DEPTH;
   if (animating) dirty |= PANE_LADDER;
   if (changed && ts - lastCandleDraw >= PRICE_LINE_MS) dirty |= PANE_CANDLES;
+  // the close countdown under the price tag ticks once a second even when the book is quiet
+  if (ts - lastCandleDraw >= COUNTDOWN_MS) dirty |= PANE_CANDLES;
   if (!dirty) {
     skipped++;
     return; // nothing new: skip the frame, save power
@@ -255,6 +258,13 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
       }
       break;
     case 'click': {
+      const lb = scene.liveBox;
+      if (lb && m.x >= lb.x && m.x <= lb.x + lb.w && m.y >= lb.y && m.y <= lb.y + lb.h) {
+        settings.candlesOffset = 0;
+        settings.candlesPricePan = 0;
+        dirty |= PANE_CANDLES;
+        break;
+      }
       const hit = scene.patternBoxes.find((b) => m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h);
       settings.selectedPattern = hit ? (settings.selectedPattern === hit.id ? null : hit.id) : settings.selectedPattern;
       if (hit) postMessage({ type: 'selected', id: settings.selectedPattern });

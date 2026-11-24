@@ -52,6 +52,8 @@ export interface Snapshot {
     list: PatternHit[]; outcomes: Outcome[]; computeMs: number; candles: number; backfill: number; source: string;
     /** the window the list was searched in (null: all history); candle open times; last price */
     window: AnalysisWindow | null; t: Float64Array; last: number; symbol: string;
+    /** 24 h ticker figures from the candles (null until history arrives) */
+    day: { ref: number; hi: number; lo: number; vol: number; hours: number } | null;
   };
   liq: LiqStats | null;
 }
@@ -99,7 +101,7 @@ export class Engine {
     this.analytics = new Worker(new URL('../workers/analytics.worker.ts', import.meta.url), { type: 'module', name: 'analytics' });
     this.render = new Worker(new URL('../workers/render.worker.ts', import.meta.url), { type: 'module', name: 'render' });
     this.liq = new Worker(new URL('../workers/liquidation.worker.ts', import.meta.url), { type: 'module', name: 'liquidations' });
-    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, t: new Float64Array(0), last: NaN, symbol: '' }, liq: null };
+    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, t: new Float64Array(0), last: NaN, symbol: '', day: null }, liq: null };
 
     const fr = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const fa = { kraken: new MessageChannel(), binance: new MessageChannel() };
@@ -130,6 +132,7 @@ export class Engine {
         this.snap.patterns = {
           list: e.data.patterns, outcomes: e.data.outcomes, computeMs: e.data.computeMs, candles: e.data.candles, backfill: e.data.backfill ?? 0, source: e.data.source ?? '',
           window: e.data.window ?? null, t: e.data.t ?? new Float64Array(0), last: e.data.last ?? NaN, symbol: e.data.symbol ?? '',
+          day: e.data.day ?? null,
         };
         this.onPatterns({ ...this.snap.patterns });
       }
@@ -251,7 +254,7 @@ export class Engine {
       this.liqKey = key;
       this.liq.postMessage({ type: 'focus', base, interval: this.o.interval });
     }
-    this.render.postMessage({ type: 'settings', settings: { venueLabel: this.o.venue.toUpperCase(), pairLabel: label, intervalLabel: intervalLabel(this.o.interval) } });
+    this.render.postMessage({ type: 'settings', settings: { venueLabel: this.o.venue.toUpperCase(), pairLabel: label, intervalLabel: intervalLabel(this.o.interval), intervalMin: this.o.interval } });
   }
 
   setVenue(v: Venue): void { this.setWindow(null); this.o.venue = v; this.applyFocus(); }
@@ -320,13 +323,13 @@ export class Engine {
   }
 
   /** Read the focused book for the accessible table (main thread, low rate). */
-  ladder(): { status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number; bestBid: number; bestAsk: number } | null {
+  ladder(): { status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number; bestBid: number; bestAsk: number; tick: number } | null {
     if (!this.shared) return null;
     const v = this.views[this.o.venue];
     if (!seqRead(v.seq, v.data, this.local)) return null;
     const d = this.local;
     const rows = (base: number, n: number) => Array.from({ length: Math.min(n, 15) }, (_, i) => ({ price: d[base + i * 3], qty: d[base + i * 3 + 1], cum: d[base + i * 3 + 2] }));
-    return { status: STATUS_NAMES[d[H.status]] ?? '', bids: rows(LAD_BID, d[H.nLadBid]), asks: rows(LAD_ASK, d[H.nLadAsk]), decimals: d[H.priceDecimals], bestBid: d[H.bestBid], bestAsk: d[H.bestAsk] };
+    return { status: STATUS_NAMES[d[H.status]] ?? '', bids: rows(LAD_BID, d[H.nLadBid]), asks: rows(LAD_ASK, d[H.nLadAsk]), decimals: d[H.priceDecimals], bestBid: d[H.bestBid], bestAsk: d[H.bestAsk], tick: d[H.tickSize] };
   }
 
   destroy(): void {

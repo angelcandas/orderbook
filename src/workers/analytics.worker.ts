@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { dayStats } from '../shared/day';
 import type { Candle } from '../patterns/candle';
 import { detect, type Detection } from '../patterns/detect';
 import { toSeries } from '../patterns/series';
@@ -79,6 +80,7 @@ function compute(): void {
       type: 'patterns', venue, symbol, patterns: d.patterns, outcomes: d.outcomes, computeMs: out.computeMs, candles: n,
       backfill: series[venue].backfill, source: series[venue].source,
       window: win, t: times, last: n ? candles[n - 1].c : NaN,
+      day: dayStats(candles),
     }, [times.buffer]);
   }
 }
@@ -146,3 +148,4 @@ self.onmessage = (e: MessageEvent) => {
     schedule();
   }
 };
+
