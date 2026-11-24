@@ -207,6 +207,8 @@ export class KrakenFeed {
       closed: false,
     });
     const sym = data[0].symbol;
+    // late bars from the interval we just left would land in the wrong buckets
+    if (this.ohlc && data[0].interval !== undefined && data[0].interval !== this.ohlc.interval) return;
     if (msg.type === 'snapshot') {
       const cs = data.map(toCandle).sort((a, b) => a.t - b.t);
       cs.forEach((c, i) => (c.closed = i < cs.length - 1));

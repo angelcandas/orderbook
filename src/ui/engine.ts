@@ -1,5 +1,6 @@
 import { allocView, sabSupported, H, LAD_ASK, LAD_BID, VIEW_LEN, seqRead, STATUS_NAMES } from '../shared/view';
-import { PAIRS, type Endpoints, type Interval, type Venue } from '../shared/config';
+import type { IndConfig } from '../indicators/spec';
+import { intervalLabel, PAIRS, type Endpoints, type Interval, type Venue } from '../shared/config';
 import { MarketIndex, liveSymbols, splitLabel, type Catalog, type Market, type Resolved } from '../shared/pairs';
 import { Histogram, type HistSummary } from '../shared/hist';
 import type { FeedStats, RenderStats } from '../workers/protocol';
@@ -28,6 +29,8 @@ export interface EngineOptions {
   theme: 'dark' | 'light';
   layout?: LayoutPrefs;
   fontPx?: number;
+  /** chart indicators (default: EMA 20, EMA 50, volume) */
+  indicators?: IndConfig[];
 }
 
 export interface MainStats {
@@ -121,6 +124,7 @@ export class Engine {
       }, [fr[v].port1, fa[v].port1]);
     }
     this.analytics.postMessage({ type: 'init', renderPort: ar.port1, feedPorts: [fa.kraken.port2, fa.binance.port2] }, [ar.port1, fa.kraken.port2, fa.binance.port2]);
+    if (o.indicators) this.analytics.postMessage({ type: 'indicators', list: o.indicators });
     this.analytics.onmessage = (e) => {
       if (e.data.type === 'patterns' && e.data.venue === this.o.venue) {
         this.snap.patterns = {
@@ -247,7 +251,7 @@ export class Engine {
       this.liqKey = key;
       this.liq.postMessage({ type: 'focus', base, interval: this.o.interval });
     }
-    this.render.postMessage({ type: 'settings', settings: { venueLabel: this.o.venue.toUpperCase(), pairLabel: label } });
+    this.render.postMessage({ type: 'settings', settings: { venueLabel: this.o.venue.toUpperCase(), pairLabel: label, intervalLabel: intervalLabel(this.o.interval) } });
   }
 
   setVenue(v: Venue): void { this.setWindow(null); this.o.venue = v; this.applyFocus(); }
@@ -277,6 +281,8 @@ export class Engine {
     this.syncSymbols();
     if (before !== after) { this.focusId++; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
   }
+  /** Replace the chart's indicators (computed in the analytics worker). */
+  setIndicators(list: IndConfig[]): void { this.analytics.postMessage({ type: 'indicators', list }); }
   setGroup(g: number): void { this.o.group = g; this.applyFocus(); }
   setInterval(m: Interval): void { this.o.interval = m; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
   /** Hand each feed the armed alerts for its venue (replaces the previous set). */

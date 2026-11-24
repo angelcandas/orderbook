@@ -3,8 +3,14 @@ import { hex, type RGBA } from './gl';
 export interface Theme {
   bg: RGBA; panel: RGBA; grid: RGBA; text: RGBA; dim: RGBA;
   bid: RGBA; ask: RGBA; bidFill: RGBA; askFill: RGBA; bidBar: RGBA; askBar: RGBA;
-  accent: RGBA; warn: RGBA; bull: RGBA; bear: RGBA; neutral: RGBA; ema20: RGBA; ema50: RGBA; vol: RGBA;
+  accent: RGBA; warn: RGBA; bull: RGBA; bear: RGBA; neutral: RGBA; vol: RGBA;
+  /** indicator colours, picked by index */
+  ind: RGBA[];
 }
+
+/** indicator palettes; the page shows the same colours in the indicator menu */
+export const IND_DARK = ['#6ea8fe', '#bc8cff', '#f0883e', '#3fb950', '#db61a2', '#39c5cf', '#d4a72c', '#8b949e'];
+export const IND_LIGHT = ['#0969da', '#8250df', '#bc4c00', '#1a7f37', '#bf3989', '#1b7c83', '#9a6700', '#59636e'];
 
 export const DARK: Theme = {
   bg: hex('#0d1117'), panel: hex('#121821'), grid: hex('#1f2630'), text: hex('#d6dde6'), dim: hex('#7d8796'),
@@ -13,7 +19,8 @@ export const DARK: Theme = {
   bidBar: hex('#2ebd85', 0.14), askBar: hex('#e5534b', 0.14),
   accent: hex('#6ea8fe'), warn: hex('#d4a72c'),
   bull: hex('#3fb950'), bear: hex('#f85149'), neutral: hex('#d4a72c'),
-  ema20: hex('#6ea8fe', 0.9), ema50: hex('#bc8cff', 0.9), vol: hex('#7d8796', 0.35),
+  vol: hex('#7d8796', 0.35),
+  ind: IND_DARK.map((c) => hex(c, 0.9)),
 };
 
 export const LIGHT: Theme = {
@@ -23,5 +30,6 @@ export const LIGHT: Theme = {
   bidBar: hex('#1a7f37', 0.12), askBar: hex('#cf222e', 0.12),
   accent: hex('#0969da'), warn: hex('#9a6700'),
   bull: hex('#1a7f37'), bear: hex('#cf222e'), neutral: hex('#9a6700'),
-  ema20: hex('#0969da', 0.9), ema50: hex('#8250df', 0.9), vol: hex('#59636e', 0.3),
+  vol: hex('#59636e', 0.3),
+  ind: IND_LIGHT.map((c) => hex(c, 0.9)),
 };

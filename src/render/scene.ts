@@ -4,6 +4,8 @@ import { H, LAD_BID, LAD_ASK, DEP_BID, DEP_ASK, LADDER, STATUS_NAMES } from '../
 import type { AnalyticsOut, PatternHit } from '../patterns/types';
 import { lowerBound, type AnalysisWindow } from '../patterns/window';
 import { LiqView } from './liq';
+import { drawPriceIndicators, drawSubPane, drawVolume, indColor, subPaneHeight, type XMap } from './indicators';
+import type { IndOut } from '../indicators/spec';
 import { computeLayout, DEFAULT_LAYOUT, type LayoutPrefs, type Rect } from './layout';
 
 export interface SceneSettings {
@@ -23,6 +25,8 @@ export interface SceneSettings {
   showLiquidations?: boolean;
   venueLabel: string;
   pairLabel: string;
+  /** candle size, e.g. "15m" or "1D", for the pane header */
+  intervalLabel?: string;
 }
 
 
@@ -33,6 +37,8 @@ const HEADER = 22;
 export const HEADER_CTRL_W = 92;
 /** candle chart price axis width and time strip height, css px (the page puts drag handles on them) */
 export const CANDLE_AXIS_W = 70, CANDLE_TIME_H = 24, PANE_HEADER = HEADER;
+/** px of the candle header taken by the page's window / explain / indicators buttons */
+export const CANDLE_TOOLS_W = 320;
 
 /**
  * Draws the whole market view into one WebGL2 canvas: ladder (left), depth
@@ -64,6 +70,7 @@ export class Scene {
   private cmap: { first: number; N: number; step: number; px: number; pw: number; py: number; ph: number; lo: number; hi: number; t: Float64Array } | null = null;
   /** liquidation levels, fed by the render worker */
   readonly liq = new LiqView();
+  private subRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 
   constructor(private g: Gfx) {}
 
@@ -362,6 +369,21 @@ export class Scene {
   }
 
   // ---------------- candles + patterns ----------------
+  /** "CANDLES 15m" then the overlays in their colours, as far as they fit before the header buttons */
+  private candleHeader(a: AnalyticsOut | null, s: SceneSettings, t: Theme): void {
+    const g = this.g, r = this.candles, cw = g.atlas.cellW;
+    this.header(r, 'CANDLES', t);
+    const y = r.y + (HEADER - g.atlas.cellH) / 2;
+    let x = r.x + 8 + 8 * cw;
+    if (s.intervalLabel) x += g.text(x, y, s.intervalLabel, t.text) + 2 * cw;
+    const end = r.x + r.w - HEADER_CTRL_W - CANDLE_TOOLS_W - 8;
+    for (const ind of a?.ind ?? []) {
+      if (ind.pane === 'sub') continue;
+      if (x + ind.label.length * cw > end) { if (x + 3 * cw <= end) g.text(x, y, '...', t.dim); break; }
+      x += g.text(x, y, ind.label, ind.pane === 'volume' ? t.dim : indColor(t, ind)) + 2 * cw;
+    }
+  }
+
   /**
    * Drawn in three passes so a vertical zoom can't spill price content over
    * the header, axis or volume: frame (clears the pane), price content
@@ -371,7 +393,7 @@ export class Scene {
   private drawCandles(a: AnalyticsOut | null, v: Float64Array, ptr: { x: number; y: number; in: boolean }, s: SceneSettings, t: Theme): boolean {
     const g = this.g;
     const r = this.candles;
-    this.header(r, 'CANDLES  EMA20  EMA50  PATTERNS', t);
+    this.candleHeader(a, s, t);
     this.patternBoxes.length = 0;
     if (!a || a.c.length === 0) {
       g.text(r.x + 12, r.y + HEADER + 12, 'waiting for candles...', t.dim);
@@ -382,13 +404,19 @@ export class Scene {
     const first = N - vis;
     const axisW = CANDLE_AXIS_W;
     const px = r.x + 8, pw = r.w - 16 - axisW;
-    const volH = Math.round((r.h - HEADER) * 0.14);
-    const py = r.y + HEADER + 10, ph = r.h - HEADER - 10 - 24 - volH;
-    let lo = Infinity, hi = -Infinity, vmax = 0;
+    // stacked top to bottom: price plot, volume strip, one pane per oscillator, time strip
+    const ind = a.ind ?? [];
+    let nSub = 0, vol: IndOut | null = null;
+    for (const x of ind) { if (x.pane === 'sub') nSub++; else if (x.pane === 'volume') vol = x; }
+    const py = r.y + HEADER + 10;
+    const avail = r.h - HEADER - 10 - CANDLE_TIME_H;
+    const subH = subPaneHeight(avail, nSub);
+    const volH = vol ? Math.round((avail - subH * nSub) * 0.14) : 0;
+    const ph = avail - subH * nSub - volH;
+    let lo = Infinity, hi = -Infinity;
     for (let i = first; i < N; i++) {
       if (a.l[i] < lo) lo = a.l[i];
       if (a.h[i] > hi) hi = a.h[i];
-      if (a.v[i] > vmax) vmax = a.v[i];
     }
     const pad = (hi - lo) * 0.08 || hi * 0.001;
     lo -= pad; hi += pad;
@@ -404,6 +432,10 @@ export class Scene {
     const X = (i: number) => px + (i - first + 0.5) * step;
     const Y = (p: number) => py + ((hi - p) / (hi - lo)) * ph;
     const pd = v[H.priceDecimals] | 0;
+    const xm: XMap = { first, N, step, bw, X };
+    const volBase = py + ph + volH, chartBottom = volBase + subH * nSub;
+    const inChart = ptr.in && ptr.x >= px && ptr.x <= px + pw && ptr.y >= py && ptr.y <= chartBottom;
+    const hover = inChart ? Math.min(N - 1, Math.max(first, first + Math.floor((ptr.x - px) / step))) : -1;
     this.cmap = { first, N, step, px, pw, py, ph, lo, hi, t: a.t };
     // grid + axis
     for (let k = 0; k <= 5; k++) {
@@ -413,11 +445,13 @@ export class Scene {
       g.number(r.x + r.w - 8, y - g.atlas.cellH / 2, p, pd, t.dim, false);
     }
     if (s.showLiquidations !== false) this.liq.draw(g, a, first, N, step, X, Y, lo, hi, py, ph, px + pw - 4, t);
-    const volBase = r.y + r.h - 24;
-    for (let i = first; i < N; i++) {
-      const col = a.c[i] >= a.o[i] ? t.bid : t.ask;
-      const vh = vmax > 0 ? (a.v[i] / vmax) * volH : 0;
-      g.rect(X(i) - bw / 2, volBase - vh, bw, vh, withAlpha(col, 0.35));
+    if (vol) drawVolume(g, vol, a.o, a.c, a.v, xm, py + ph, volH, t);
+    let sy = volBase;
+    for (const x of ind) {
+      if (x.pane !== 'sub') continue;
+      this.subRect.x = px; this.subRect.y = sy; this.subRect.w = pw; this.subRect.h = subH;
+      drawSubPane(g, x, this.subRect, r.x + r.w - 8, xm, hover, t);
+      sy += subH;
     }
     // live price tag on the axis (the dashed line is drawn with the price content)
     const bb = v[H.bestBid], ba = v[H.bestAsk];
@@ -441,12 +475,7 @@ export class Scene {
       const y1 = Y(Math.min(a.o[i], a.c[i]));
       g.rect(x - bw / 2, y0, bw, Math.max(1, y1 - y0), col);
     }
-    // EMAs
-    for (const [arr, col] of [[a.ema20, t.ema20], [a.ema50, t.ema50]] as const) {
-      for (let i = Math.max(first + 1, 1); i < N; i++) {
-        if (arr[i - 1] === arr[i - 1] && arr[i] === arr[i]) g.line(X(i - 1), Y(arr[i - 1]), X(i), Y(arr[i]), 1.2, col);
-      }
-    }
+    drawPriceIndicators(g, ind, xm, Y, t);
     // live price line from the book
     if (showMid) g.dashed(px, Y(m), px + pw, Y(m), 1, 3, withAlpha(t.accent, 0.7));
 
@@ -534,9 +563,9 @@ export class Scene {
 
     // ---- crosshair + OHLC readout, over everything ----
     g.begin();
-    if (ptr.in && ptr.x >= px && ptr.x <= px + pw && ptr.y >= py && ptr.y <= volBase) {
-      const i = Math.min(N - 1, Math.max(first, first + Math.floor((ptr.x - px) / step)));
-      g.rect(X(i), py, 1, volBase - py, withAlpha(t.text, 0.3));
+    if (hover >= 0) {
+      const i = hover;
+      g.rect(X(i), py, 1, chartBottom - py, withAlpha(t.text, 0.3));
       g.rect(px, ptr.y, pw, 1, withAlpha(t.text, 0.3));
       const y = r.y + HEADER + 2;
       let x = r.x + r.w - axisW - 8 - 60 * g.atlas.cellW;

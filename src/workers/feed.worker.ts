@@ -4,7 +4,8 @@ import { BinanceFeed } from '../feeds/binance';
 import type { FeedSink } from '../feeds/types';
 import { Book } from '../engine/book';
 import { Histogram } from '../shared/hist';
-import { binanceInterval, type Interval } from '../shared/config';
+import { binanceInterval, intervalMs, krakenBase } from '../shared/config';
+import { Aggregator } from '../feeds/aggregate';
 import { binanceHistory, krakenOhlc, prepend, stitchOlder, HISTORY_BARS } from '../feeds/history';
 import type { Candle } from '../patterns/candle';
 import { Status, STATUS_NAMES, VIEW_LEN, seqWrite, writeView, wrapView } from '../shared/view';
@@ -64,6 +65,10 @@ function markDirty(): void {
 
 let focusInterval = 0;
 let altSymbol: string | null = null;
+/** Kraken intervals it doesn't serve are built from a smaller one (see feeds/aggregate) */
+let agg: Aggregator | null = null;
+const postCandles = (symbol: string, candles: Candle[]) =>
+  init.analyticsPort.postMessage({ type: 'candles', venue: init.venue, symbol, candles });
 
 const sink: FeedSink = {
   onBook(symbol: string, _book: Book) {
@@ -75,10 +80,10 @@ const sink: FeedSink = {
     if (symbol === focus.symbol) markDirty();
   },
   onCandles(symbol, candles) {
-    init.analyticsPort.postMessage({ type: 'candles', venue: init.venue, symbol, candles });
+    postCandles(symbol, agg ? agg.merge(candles) : candles);
   },
   onCandle(symbol, candle) {
-    init.analyticsPort.postMessage({ type: 'candle', venue: init.venue, symbol, candle });
+    init.analyticsPort.postMessage({ type: 'candle', venue: init.venue, symbol, candle: agg ? agg.update(candle) : candle });
   },
   onHistory(symbol, candles, source) {
     init.analyticsPort.postMessage({ type: 'history', venue: init.venue, symbol, candles, source });
@@ -147,32 +152,42 @@ self.onmessage = (ev: MessageEvent<FeedCmd | { type: 'resetStats' }>) => {
     };
     if (m.venue === 'kraken') {
       // Kraken serves only its latest 720 bars; older ones come from the same pair on Binance
-      const backfill = async (symbol: string, interval: number, snap: Candle[]) => {
-        const stepMs = interval * 60_000;
+      const backfill = async (symbol: string, baseIv: number, snap: Candle[]) => {
+        const target = focusInterval;
+        const a = agg;
         const alt = altSymbol;
-        const alive = () => focusInterval === interval && altSymbol === alt;
+        const alive = () => focusInterval === target && altSymbol === alt && agg === a;
         // Kraken's own bars first: the WS snapshot is short, REST has the latest 720
-        let recent = snap;
+        let recent = a ? a.merge([]) : snap;
         let own = 0;
         if (m.endpoints.krakenRest) {
           try {
-            recent = prepend(snap, await krakenOhlc(fetchJson, m.endpoints.krakenRest, symbol, interval));
-            own = recent.length - snap.length;
+            const rest = await krakenOhlc(fetchJson, m.endpoints.krakenRest, symbol, baseIv);
+            if (a) {
+              if (!alive()) return { candles: [], source: '' };
+              // aggregated: resend the whole series, since the snapshot's first bucket may have been partial
+              recent = a.merge(rest);
+              own = 1;
+              postCandles(symbol, recent);
+            } else {
+              recent = prepend(snap, rest);
+              own = recent.length - snap.length;
+            }
           } catch (e) {
             sink.log(`kraken REST OHLC failed, using Binance only: ${e}`);
           }
         }
         let older: Candle[] = [];
-        if (alt && alive()) {
+        if (alt && alive() && recent.length) {
           try {
-            const b = await binanceHistory(fetchJson, m.endpoints.binanceRest, alt, binanceInterval(interval as Interval),
-              snap[snap.length - 1].t + stepMs, HISTORY_BARS, alive);
+            const b = await binanceHistory(fetchJson, m.endpoints.binanceRest, alt, binanceInterval(target),
+              recent[recent.length - 1].t + intervalMs(target), HISTORY_BARS, alive);
             older = stitchOlder(b, recent);
           } catch (e) {
             sink.log(`binance backfill failed: ${e}`);
           }
         }
-        const candles = older.concat(recent.slice(0, own));
+        const candles = a ? older : older.concat(recent.slice(0, own));
         const source = own && older.length ? 'kraken+binance' : own ? 'kraken' : 'binance';
         return { candles, source };
       };
@@ -196,8 +211,11 @@ self.onmessage = (ev: MessageEvent<FeedCmd | { type: 'resetStats' }>) => {
   } else if (m.type === 'candles') {
     focusInterval = m.interval;
     altSymbol = m.alt ?? null;
-    if (feed instanceof KrakenFeed) feed.setOhlc(m.symbol, m.interval);
-    else feed.setKline(m.symbol, binanceInterval(m.interval as Interval));
+    if (feed instanceof KrakenFeed) {
+      const base = krakenBase(m.interval);
+      agg = base !== m.interval ? new Aggregator(m.interval, intervalMs(base)) : null;
+      feed.setOhlc(m.symbol, base);
+    } else feed.setKline(m.symbol, binanceInterval(m.interval));
   } else if (m.type === 'alerts') {
     alerts.set(m.list);
     if (alerts.size && alertTimer === null && feed) alertTimer = setInterval(checkAlerts, CHECK_MS);

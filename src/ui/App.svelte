@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Engine, type Snapshot, type LadderRow } from './engine';
-  import { INTERVALS, LIVE, localEndpoints, type Interval, type Venue } from '../shared/config';
+  import { INTERVALS, LIVE, intervalLabel, isInterval, localEndpoints, type Interval, type Venue } from '../shared/config';
+  import Indicators from './Indicators.svelte';
+  import type { IndConfig } from '../indicators/spec';
   import {
     allPairs, builtinCatalog, loadCachedCatalog, loadFavourites, MarketIndex, quoteRanking,
     saveCachedCatalog, saveFavourites, splitLabel, toggleFavourite, type Catalog,
@@ -13,10 +15,10 @@
   import { explain, explanationText, type Explanation } from '../patterns/explain';
   import Alerts from './Alerts.svelte';
   import { midOf } from '../alerts/alerts';
-  import { HEADER_CTRL_W, CANDLE_AXIS_W, CANDLE_TIME_H, PANE_HEADER } from '../render/scene';
+  import { HEADER_CTRL_W, CANDLE_AXIS_W, CANDLE_TIME_H, CANDLE_TOOLS_W, PANE_HEADER } from '../render/scene';
   import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs } from '../render/layout';
   import type { ZoomPane } from '../workers/protocol';
-  import { loadPrefs, savePrefs, defaultPrefs, SIDE_W, type ViewPrefs } from './prefs';
+  import { loadPrefs, savePrefs, defaultPrefs, loadChartPrefs, saveChartPrefs, SIDE_W, type ViewPrefs } from './prefs';
 
   const q = new URLSearchParams(location.search);
   let source = $state<'live' | 'local'>(q.get('src') === 'local' ? 'local' : 'live');
@@ -32,14 +34,19 @@
   let index = $derived({ kraken: new MarketIndex(catalog.kraken), binance: new MarketIndex(catalog.binance) });
   let res = $derived(index[venue].resolve(pair));
   let group = $state(Number(q.get('group') ?? 1));
-  let interval = $state<Interval>((Number(q.get('interval')) as Interval) || 15);
+  // candle size, indicators and overlay toggles, remembered in this browser; URL parameters win
+  const chartSaved = loadChartPrefs();
+  const qInterval = Number(q.get('interval'));
+  let interval = $state<Interval>(isInterval(qInterval) ? qInterval : chartSaved.interval);
   let load = $state(Number(q.get('pairs') ?? 1));
   let theme = $state<'dark' | 'light'>(q.get('theme') === 'light' ? 'light' : 'dark');
-  let showChart = $state(true);
-  let showCandle = $state(true);
+  let showChart = $state(chartSaved.showChartPatterns);
+  let showCandle = $state(chartSaved.showCandlePatterns);
+  let indicators = $state.raw<IndConfig[]>(chartSaved.indicators);
+  let indMenu = $state(false);
   let reducedMotion = $state(matchMedia('(prefers-reduced-motion: reduce)').matches);
   let showTable = $state(false);
-  let showLiq = $state(q.get('liq') !== '0');
+  let showLiq = $state(q.has('liq') ? q.get('liq') !== '0' : chartSaved.showLiquidations);
   let selected = $state<string | null>(null);
   // analysis window: a box dragged on the candle chart; patterns are searched inside it only
   let win = $state.raw<AnalysisWindow | null>(null);
@@ -55,6 +62,12 @@
   let zoomState = $state.raw({ candlesVisible: saved.candlesVisible, depthRangePct: saved.depthRangePct, ladderRowPad: saved.ladderRowPad, candlesPriceScale: saved.candlesPriceScale });
   let stageW = $state(0), stageH = $state(0);
   let panes = $derived(stageW ? computeLayout(stageW, stageH, layoutPrefs) : null);
+  const persistChart = () => saveChartPrefs({ interval, indicators, showChartPatterns: showChart, showCandlePatterns: showCandle, showLiquidations: showLiq });
+  function setIndicators(list: IndConfig[]) {
+    indicators = list;
+    engine?.setIndicators(list);
+    persistChart();
+  }
   const persist = () => savePrefs({ layout: layoutPrefs, sideW, fontPx, ...zoomState } satisfies ViewPrefs);
 
   let stats = $state<Snapshot | null>(null);
@@ -69,7 +82,7 @@
   const settings = (): SceneSettings => ({
     depthRangePct: zoomState.depthRangePct, candlesVisible: zoomState.candlesVisible, ladderRowPad: zoomState.ladderRowPad, candlesPriceScale: zoomState.candlesPriceScale, reducedMotion,
     showChartPatterns: showChart, showCandlePatterns: showCandle, selectedPattern: selected, showLiquidations: showLiq,
-    venueLabel: venue.toUpperCase(), pairLabel: res ? `${res.base}/${res.quote}` : pair,
+    venueLabel: venue.toUpperCase(), pairLabel: res ? `${res.base}/${res.quote}` : pair, intervalLabel: intervalLabel(interval),
   });
 
   function start() {
@@ -80,7 +93,7 @@
       endpoints: source === 'local' ? localEndpoints(host) : LIVE,
       pairCount: load,
       depth: { kraken: source === 'local' ? 1000 : 500, binance: 1000 },
-      venue, pair, catalog, group, interval, settings: settings(), theme, layout: layoutPrefs, fontPx,
+      venue, pair, catalog, group, interval, settings: settings(), theme, layout: layoutPrefs, fontPx, indicators,
     });
     engine.onZoom = (z) => {
       zoomState = { candlesVisible: z.candlesVisible, depthRangePct: z.depthRangePct, ladderRowPad: z.ladderRowPad, candlesPriceScale: z.candlesPriceScale };
@@ -379,8 +392,8 @@
       </select>
     </label>
     <label>Candles
-      <select bind:value={interval} onchange={() => { engine?.setInterval(interval); selected = null; syncUrl(); }}>
-        {#each INTERVALS as m}<option value={m}>{m < 60 ? `${m}m` : `${m / 60}h`}</option>{/each}
+      <select bind:value={interval} onchange={() => { engine?.setInterval(interval); selected = null; syncUrl(); persistChart(); }}>
+        {#each INTERVALS as m}<option value={m}>{intervalLabel(m)}</option>{/each}
       </select>
     </label>
     <label title="Pairs kept live per venue. More pairs = more updates per second.">Load
@@ -411,11 +424,20 @@
         {/each}
         {@const c = panes.candles}
         <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-        <div class="zoom wintools" role="group" aria-label="Pattern analysis window" style="left:{c.x + c.w - HEADER_CTRL_W - 236}px; top:{c.y + 2}px; width:232px" onclick={(e) => e.stopPropagation()}>
+        <div class="zoom wintools" role="group" aria-label="Pattern analysis window and indicators" style="left:{c.x + c.w - HEADER_CTRL_W - CANDLE_TOOLS_W}px; top:{c.y + 2}px; width:{CANDLE_TOOLS_W - 4}px" onclick={(e) => e.stopPropagation()}>
+          <button class:on={indMenu} aria-expanded={indMenu} title="Add, remove and configure indicators" onclick={() => (indMenu = !indMenu)}>indicators</button>
           <button class:on={drawMode} aria-pressed={drawMode} title="Drag a box over the candles to search for patterns only inside it (or shift+drag any time)" onclick={() => (drawMode = !drawMode)}>{drawMode ? 'drag a box…' : 'window'}</button>
           {#if win}<button title="Search the whole history again" onclick={clearWindow}>clear</button>{/if}
           <button title="Explain the detected patterns in plain words" onclick={openExplanation}>explain</button>
         </div>
+        {#if indMenu}
+          <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+          <div class="indmenu" role="dialog" tabindex="-1" aria-label="Indicators" style="right:{stageW - (c.x + c.w - HEADER_CTRL_W)}px; top:{c.y + PANE_HEADER + 2}px"
+            onclick={(e) => e.stopPropagation()} onpointerdown={(e) => e.stopPropagation()} onwheel={(e) => e.stopPropagation()}>
+            <div class="ehead"><h2>Indicators</h2><button class="link" onclick={() => (indMenu = false)}>close</button></div>
+            <Indicators list={indicators} {theme} onchange={setIndicators} />
+          </div>
+        {/if}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
         <div class="axis y" role="slider" tabindex="0" aria-label="Candle chart vertical zoom" aria-valuemin={ZOOM.priceScale.min} aria-valuemax={ZOOM.priceScale.max} aria-valuenow={zoomState.candlesPriceScale}
           title="Drag up or down to zoom prices. Double-click to fit."
@@ -488,8 +510,13 @@
       </section>
 
       <section>
+        <h2>Indicators</h2>
+        <Indicators list={indicators} {theme} onchange={setIndicators} />
+      </section>
+
+      <section>
         <h2>Chart patterns
-          <label class="tog"><input type="checkbox" bind:checked={showChart} onchange={() => engine?.setSettings({ showChartPatterns: showChart })} /> show</label>
+          <label class="tog"><input type="checkbox" bind:checked={showChart} onchange={() => { engine?.setSettings({ showChartPatterns: showChart }); persistChart(); }} /> show</label>
         </h2>
         {#if win}<p class="dim small">Searching only inside the box drawn on the chart. <button class="link" onclick={clearWindow}>Clear window</button></p>
         {:else}<p class="dim small">Drag a box on the candles with <b>window</b> (or shift+drag) to analyse just that part.</p>{/if}
@@ -524,7 +551,7 @@
       <section>
         <h2>Liquidation levels
           <span class="pill" class:ok={stats?.liq?.status === 'live'} class:bad={/error|no /.test(stats?.liq?.status ?? '')}>{stats?.liq?.status ?? 'idle'}</span>
-          <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={() => { engine?.setSettings({ showLiquidations: showLiq }); syncUrl(); }} /> show</label>
+          <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={() => { engine?.setSettings({ showLiquidations: showLiq }); syncUrl(); persistChart(); }} /> show</label>
         </h2>
         {#if stats?.liq}
           <dl class="mono">
@@ -539,7 +566,7 @@
 
       <section>
         <h2>Candle signals
-          <label class="tog"><input type="checkbox" bind:checked={showCandle} onchange={() => engine?.setSettings({ showCandlePatterns: showCandle })} /> show</label>
+          <label class="tog"><input type="checkbox" bind:checked={showCandle} onchange={() => { engine?.setSettings({ showCandlePatterns: showCandle }); persistChart(); }} /> show</label>
         </h2>
         <ul class="pats">
           {#each candlePats as p (p.id)}
@@ -620,6 +647,9 @@
   .stage.drawing { cursor: crosshair; }
   .wintools button.on { color: var(--accent); border-color: var(--accent); }
   .explain { margin: 4px 0 8px; }
+  .indmenu { position: absolute; z-index: 4; width: min(300px, calc(100% - 32px)); max-height: 70%; overflow: auto; padding: 6px 12px 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 28px rgb(0 0 0 / 0.35); }
+  .indmenu h2 { margin: 4px 0; }
   .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.35); z-index: 20; }
   .explainer { position: fixed; z-index: 21; top: 8vh; left: 50%; transform: translateX(-50%); width: min(720px, calc(100vw - 32px)); max-height: 84vh; overflow: auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.4); }

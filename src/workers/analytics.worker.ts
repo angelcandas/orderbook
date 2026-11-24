@@ -6,6 +6,7 @@ import { detectInWindow, type AnalysisWindow } from '../patterns/window';
 import type { AnalyticsOut } from '../patterns/types';
 import type { Venue } from '../shared/config';
 import { MAX_BARS, prepend, stepOf } from '../feeds/history';
+import { computeAll, defaultIndicators, type IndConfig } from '../indicators/spec';
 
 /**
  * Candles in, indicators and patterns out. Runs off the render and feed threads;
@@ -22,6 +23,8 @@ let lastClosedCount = -1;
 let cached: Detection | null = null;
 /** the box drawn on the candle chart; patterns are searched inside it only */
 let win: AnalysisWindow | null = null;
+/** the indicators the chart shows; recomputed on every pass since the forming candle moves them */
+let indicators: IndConfig[] = defaultIndicators();
 
 /** Indicators over everything, patterns over the window when one is drawn. */
 function run(candles: Candle[]): Detection {
@@ -57,7 +60,7 @@ function compute(): void {
   const out: AnalyticsOut = {
     symbol,
     t: new Float64Array(n), o: new Float64Array(n), h: new Float64Array(n), l: new Float64Array(n), c: new Float64Array(n), v: new Float64Array(n),
-    ema20: d.series.ema20.slice(0, n), ema50: d.series.ema50.slice(0, n), atr14: d.series.atr.slice(0, n),
+    ind: [],
     patterns: d.patterns,
     computeMs: 0,
   };
@@ -65,9 +68,12 @@ function compute(): void {
     const k = candles[i];
     out.t[i] = k.t; out.o[i] = k.o; out.h[i] = k.h; out.l[i] = k.l; out.c[i] = k.c; out.v[i] = k.v;
   }
+  out.ind = computeAll(indicators, out);
   out.computeMs = performance.now() - t0;
   const times = fresh ? new Float64Array(out.t) : null; // copied before out.t is transferred
-  renderPort.postMessage(out, [out.t.buffer, out.o.buffer, out.h.buffer, out.l.buffer, out.c.buffer, out.v.buffer]);
+  const transfer: Transferable[] = [out.t.buffer, out.o.buffer, out.h.buffer, out.l.buffer, out.c.buffer, out.v.buffer];
+  for (const x of out.ind) for (const a of x.lines) transfer.push(a.buffer);
+  renderPort.postMessage(out, transfer);
   if (times) {
     postMessage({
       type: 'patterns', venue, symbol, patterns: d.patterns, outcomes: d.outcomes, computeMs: out.computeMs, candles: n,
@@ -88,7 +94,9 @@ function onFeed(e: MessageEvent): void {
   if (m.type === 'candles') {
     const next: Candle[] = m.candles;
     // a fresh snapshot after a reconnect: keep the backfilled bars that still line up
-    const same = m.symbol === s.symbol && stepOf(next) > 0 && stepOf(next) === stepOf(s.candles);
+    const st = stepOf(next), prev = stepOf(s.candles);
+    // steps compared loosely: monthly bars run 28 to 31 days
+    const same = m.symbol === s.symbol && st > 0 && prev > 0 && Math.abs(st - prev) <= prev * 0.15;
     const merged = same ? prepend(next, s.candles.filter((c) => c.closed)) : next;
     if (!same) { s.backfill = 0; s.source = ''; }
     else s.backfill = Math.max(0, Math.min(s.backfill, merged.length - next.length));
@@ -120,6 +128,13 @@ self.onmessage = (e: MessageEvent) => {
     venue = m.venue;
     cached = null;
     schedule();
+  } else if (m.type === 'indicators') {
+    indicators = m.list;
+    if (!renderPort) return;
+    // indicators only: no need to search patterns again
+    dirty = true;
+    if (timer) clearTimeout(timer);
+    compute();
   } else if (m.type === 'window') {
     win = m.window;
     cached = null;

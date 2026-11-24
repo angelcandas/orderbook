@@ -195,7 +195,7 @@ function binanceRest(url: URL, res: http.ServerResponse) {
   }
   if (path === '/api/v3/klines') {
     const iv = url.searchParams.get('interval') ?? '1m';
-    const minutes = iv.endsWith('h') ? parseInt(iv) * 60 : parseInt(iv);
+    const minutes = ivMinutes(iv);
     const s = getSeries(sim, minutes);
     const limit = Math.min(1000, Number(url.searchParams.get('limit') ?? 500));
     const endTime = Number(url.searchParams.get('endTime') ?? Infinity);
@@ -203,6 +203,13 @@ function binanceRest(url: URL, res: http.ServerResponse) {
     return send(200, upto.slice(-limit).map((c) => [c.t, String(c.o), String(c.h), String(c.l), String(c.c), String(c.v), c.t + minutes * 60_000 - 1]));
   }
   send(404, { msg: 'not found' });
+}
+
+/** Binance interval string ("15m", "4h", "1d", "1w", "1M") in minutes; a month counts as 30 days here */
+function ivMinutes(iv: string): number {
+  const n = parseInt(iv) || 1;
+  const u = iv.slice(-1);
+  return n * (u === 'h' ? 60 : u === 'd' ? 1440 : u === 'w' ? 10080 : u === 'M' ? 43200 : 1);
 }
 
 // ---------- Binance USD-M futures (liquidation levels) ----------
@@ -227,7 +234,7 @@ function futuresRest(url: URL, res: http.ServerResponse) {
   if (!sim) return send(400, { code: -1121, msg: 'Invalid symbol.' });
   if (path === '/fapi/v1/klines') {
     const iv = url.searchParams.get('interval') ?? '1m';
-    const minutes = iv.endsWith('h') ? parseInt(iv) * 60 : parseInt(iv);
+    const minutes = ivMinutes(iv);
     const s = getSeries(sim, minutes);
     const limit = Math.min(1500, Number(url.searchParams.get('limit') ?? 500));
     return send(200, s.slice(-limit).map((c) => [c.t, String(c.o), String(c.h), String(c.l), String(c.c), String(c.v * 40), c.t + minutes * 60_000 - 1]));
@@ -370,7 +377,7 @@ function tick() {
         const sym = m[1].toUpperCase();
         const sim = bsims.get(sym);
         if (!sim) continue;
-        const minutes = m[2].endsWith('h') ? parseInt(m[2]) * 60 : parseInt(m[2]);
+        const minutes = ivMinutes(m[2]);
         const c = advance(getSeries(sim, minutes), minutes, sim.midTick * sim.inst.tickSize, Math.random(), wall);
         cl.ws.send(JSON.stringify({ stream: st, data: { e: 'kline', E: wall, s: sym, k: { t: c.t, T: c.t + minutes * 60_000 - 1, i: m[2], o: String(c.o), h: String(c.h), l: String(c.l), c: String(c.c), v: String(c.v), x: false } } }));
       }

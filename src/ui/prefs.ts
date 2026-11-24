@@ -1,4 +1,6 @@
 import { normalizeLayout, ZOOM, type LayoutPrefs } from '../render/layout';
+import { isInterval, type Interval } from '../shared/config';
+import { normalizeIndicators, type IndConfig } from '../indicators/spec';
 
 /** Layout and zoom the page remembers between visits, per browser. */
 export interface ViewPrefs {
@@ -44,4 +46,42 @@ export function loadPrefs(): ViewPrefs {
 
 export function savePrefs(p: ViewPrefs): void {
   try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* storage unavailable */ }
+}
+
+/**
+ * Chart state the page remembers, per browser: candle size, indicators and
+ * which overlays are shown. A URL parameter (?interval=, ?liq=0) wins over it.
+ */
+export interface ChartPrefs {
+  interval: Interval;
+  indicators: IndConfig[];
+  showChartPatterns: boolean;
+  showCandlePatterns: boolean;
+  showLiquidations: boolean;
+}
+
+const CHART_KEY = 'depthline.chart.v1';
+const bool = (x: unknown, d: boolean) => (typeof x === 'boolean' ? x : d);
+
+export function normalizeChartPrefs(p: any): ChartPrefs {
+  return {
+    interval: isInterval(p?.interval) ? p.interval : 15,
+    indicators: normalizeIndicators(p?.indicators),
+    showChartPatterns: bool(p?.showChartPatterns, true),
+    showCandlePatterns: bool(p?.showCandlePatterns, true),
+    showLiquidations: bool(p?.showLiquidations, true),
+  };
+}
+
+export function loadChartPrefs(): ChartPrefs {
+  try {
+    const raw = localStorage.getItem(CHART_KEY);
+    return normalizeChartPrefs(raw ? JSON.parse(raw) : {});
+  } catch {
+    return normalizeChartPrefs({});
+  }
+}
+
+export function saveChartPrefs(p: ChartPrefs): void {
+  try { localStorage.setItem(CHART_KEY, JSON.stringify(p)); } catch { /* storage unavailable */ }
 }
