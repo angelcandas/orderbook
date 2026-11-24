@@ -5,6 +5,7 @@ import type { FeedCounters } from '../feeds/types';
 import type { SceneSettings } from '../render/scene';
 import type { ArmedAlert } from '../alerts/alerts';
 import type { LayoutPrefs } from '../render/layout';
+import type { AnalysisWindow } from '../patterns/window';
 
 export interface FeedInit {
   type: 'init';
@@ -67,6 +68,8 @@ export type RenderCmd =
   | { type: 'pointer'; x: number; y: number; in: boolean }
   | { type: 'click'; x: number; y: number }
   | { type: 'wheel'; x: number; y: number; dy: number }
+  /** a box dragged on the candle chart; on 'end' the worker answers with a WindowPicked */
+  | { type: 'brush'; x0: number; y0: number; x1: number; y1: number; phase: 'move' | 'end' | 'cancel' }
   /** dir: +1 zoom in, -1 zoom out, 0 back to the default */
   | { type: 'zoom'; pane: ZoomPane; dir: 1 | -1 | 0 }
   | { type: 'layout'; layout: LayoutPrefs }
@@ -74,6 +77,9 @@ export type RenderCmd =
   | { type: 'settings'; settings: Partial<SceneSettings> }
   | { type: 'theme'; theme: 'dark' | 'light' }
   | { type: 'resetStats' };
+
+/** Sent by the render worker when a dragged box becomes an analysis window (null: too small). */
+export interface WindowPicked { type: 'window'; window: AnalysisWindow | null }
 
 export type ZoomPane = 'ladder' | 'depth' | 'candles';
 /** Sent by the render worker after a zoom so the page can remember it. */

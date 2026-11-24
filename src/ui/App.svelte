@@ -9,6 +9,8 @@
   import PairPicker from './PairPicker.svelte';
   import type { SceneSettings } from '../render/scene';
   import type { PatternHit } from '../patterns/types';
+  import type { AnalysisWindow } from '../patterns/window';
+  import { explain, explanationText, type Explanation } from '../patterns/explain';
   import Alerts from './Alerts.svelte';
   import { midOf } from '../alerts/alerts';
   import LiquidationHeatmap from './LiquidationHeatmap.svelte';
@@ -42,6 +44,11 @@
   // futures are quoted in USDT whatever the spot quote: BTC/USD, BTC/EUR -> BTCUSDT
   let liqSpot = $derived(`${splitLabel(pair)?.base ?? 'BTC'}USDT`);
   let selected = $state<string | null>(null);
+  // analysis window: a box dragged on the candle chart; patterns are searched inside it only
+  let win = $state.raw<AnalysisWindow | null>(null);
+  let drawMode = $state(false);
+  let explanation = $state.raw<Explanation | null>(null);
+  let copied = $state(false);
 
   // layout + zoom, remembered in this browser ($state.raw: plain objects, so they can be posted to the worker)
   const saved = loadPrefs();
@@ -91,6 +98,12 @@
       engine?.setCatalog(catalog);
     };
     engine.onSelected = (id) => (selected = id);
+    win = null; drawMode = false;
+    engine.onWindow = (w) => {
+      if (!w) return; // too small: keep the previous window
+      win = w; drawMode = false; selected = null;
+      engine?.setSettings({ selectedPattern: null });
+    };
     alertsPanel?.attach(engine);
     (window as any).__depthline = engine;
   }
@@ -125,7 +138,57 @@
     const r = canvasHost.getBoundingClientRect();
     engine?.pointer(e.clientX - r.left, e.clientY - r.top, inside);
   };
+  // ---- drawing the analysis window: drag on the candle chart in draw mode, or shift+drag any time ----
+  let brushFrom: { x: number; y: number } | null = null;
+  let swallowClick = false;
+  const local = (e: PointerEvent) => { const r = canvasHost.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  function brushStart(e: PointerEvent) {
+    if (!panes || e.button !== 0 || !(drawMode || e.shiftKey)) return;
+    const p = local(e), c = panes.candles;
+    if (p.x < c.x || p.x > c.x + c.w || p.y < c.y + 24 || p.y > c.y + c.h) return;
+    e.preventDefault();
+    brushFrom = p;
+    canvasHost.setPointerCapture(e.pointerId);
+  }
+  function brushMove(e: PointerEvent) {
+    if (!brushFrom) return;
+    const p = local(e);
+    engine?.brush(brushFrom.x, brushFrom.y, p.x, p.y, 'move');
+  }
+  function brushEnd(e: PointerEvent, cancel = false) {
+    if (!brushFrom) return;
+    const p = local(e);
+    engine?.brush(brushFrom.x, brushFrom.y, p.x, p.y, cancel ? 'cancel' : 'end');
+    swallowClick = Math.abs(p.x - brushFrom.x) + Math.abs(p.y - brushFrom.y) > 4;
+    brushFrom = null;
+  }
+  function clearWindow() {
+    win = null;
+    engine?.setWindow(null);
+  }
+  function openExplanation() {
+    const pt = stats?.patterns ?? engine?.snapshot().patterns;
+    if (!pt) return;
+    // without a window: every chart pattern and the latest candle signals, as listed in the side panel
+    const list = pt.window ? pt.list : [...pt.list.filter((p) => p.family === 'chart'), ...pt.list.filter((p) => p.family !== 'chart' && p.bias !== 0).slice(-12)];
+    explanation = explain(list, {
+      t: pt.t, last: pt.last, decimals: table?.decimals ?? 2, window: pt.window,
+      symbol: res ? `${venueName(venue)} ${res.base}/${res.quote}` : pair, interval,
+    });
+    copied = false;
+  }
+  async function copyExplanation() {
+    if (!explanation) return;
+    try { await navigator.clipboard.writeText(explanationText(explanation)); copied = true; } catch { copied = false; }
+  }
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    if (explanation) explanation = null;
+    else if (drawMode) drawMode = false;
+  };
+
   const click = (e: MouseEvent) => {
+    if (swallowClick) { swallowClick = false; return; }
     const r = canvasHost.getBoundingClientRect();
     engine?.click(e.clientX - r.left, e.clientY - r.top);
   };
@@ -155,6 +218,7 @@
   function pickPair(label: string) {
     pair = label;
     selected = null;
+    win = null;
     engine?.setPair(pair);
     syncUrl();
   }
@@ -255,6 +319,8 @@
   }
 </script>
 
+<svelte:window onkeydown={onKey} />
+
 <div class="shell">
   <header>
     <strong class="brand">Depthline</strong>
@@ -268,7 +334,7 @@
       {#each ['kraken', 'binance'] as v}
         <button class:on={venue === v} class:unlisted={!index[v as Venue].resolve(pair)}
           title={index[v as Venue].resolve(pair) ? '' : `${venueName(v as Venue)} doesn't list ${pair}`}
-          onclick={() => { venue = v as Venue; engine?.setVenue(venue); selected = null; syncUrl(); }}>{venueName(v as Venue)}</button>
+          onclick={() => { venue = v as Venue; engine?.setVenue(venue); selected = null; win = null; syncUrl(); }}>{venueName(v as Venue)}</button>
       {/each}
     </div>
     <PairPicker {pair} {entries} {quotes} {favourites} {venue} resolve={(v, l) => index[v].resolve(l)} onpick={pickPair} onfavourite={favourite} />
@@ -293,8 +359,9 @@
 
   <main>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="stage" bind:this={canvasHost}
-      onpointermove={(e) => ptr(e)} onpointerleave={(e) => ptr(e, false)} onclick={click} onwheel={wheel}
+    <div class="stage" class:drawing={drawMode} bind:this={canvasHost}
+      onpointerdown={brushStart} onpointerup={(e) => brushEnd(e)} onpointercancel={(e) => brushEnd(e, true)}
+      onpointermove={(e) => { ptr(e); brushMove(e); }} onpointerleave={(e) => ptr(e, false)} onclick={click} onwheel={wheel}
       role="application" aria-label="Order book, depth chart and candle chart. A text table of the book follows the chart.">
       {#key generation}<canvas></canvas>{/key}
       {#if panes}
@@ -307,6 +374,13 @@
             <button title={p === 'depth' ? 'Auto-fit the price range' : 'Default zoom'} aria-label="Reset zoom {paneNames[p]}" onclick={(e) => zoom(e, p, 0)}>fit</button>
           </div>
         {/each}
+        {@const c = panes.candles}
+        <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+        <div class="zoom wintools" role="group" aria-label="Pattern analysis window" style="left:{c.x + c.w - HEADER_CTRL_W - 236}px; top:{c.y + 2}px; width:232px" onclick={(e) => e.stopPropagation()}>
+          <button class:on={drawMode} aria-pressed={drawMode} title="Drag a box over the candles to search for patterns only inside it (or shift+drag any time)" onclick={() => (drawMode = !drawMode)}>{drawMode ? 'drag a box…' : 'window'}</button>
+          {#if win}<button title="Search the whole history again" onclick={clearWindow}>clear</button>{/if}
+          <button title="Explain the detected patterns in plain words" onclick={openExplanation}>explain</button>
+        </div>
         {#if panes.narrow}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
           <div class="split h" role="separator" aria-orientation="horizontal" aria-label="Resize order book" tabindex="0" aria-valuemin={5} aria-valuemax={95} aria-valuenow={Math.round(layoutPrefs[panes.narrow ? 'narrow' : 'wide']['ladder'] * 100)}
@@ -370,7 +444,10 @@
         <h2>Chart patterns
           <label class="tog"><input type="checkbox" bind:checked={showChart} onchange={() => engine?.setSettings({ showChartPatterns: showChart })} /> show</label>
         </h2>
-        {#if chartPatterns.length === 0}<p class="dim">None in view yet. Patterns need closed candles; try 1m or 5m.</p>{/if}
+        {#if win}<p class="dim small">Searching only inside the box drawn on the chart. <button class="link" onclick={clearWindow}>Clear window</button></p>
+        {:else}<p class="dim small">Drag a box on the candles with <b>window</b> (or shift+drag) to analyse just that part.</p>{/if}
+        <button class="explain" onclick={openExplanation}>Explain these patterns</button>
+        {#if chartPatterns.length === 0}<p class="dim">{win ? 'No chart patterns inside the window.' : 'None in view yet. Patterns need closed candles; try 1m or 5m.'}</p>{/if}
         <ul class="pats">
           {#each chartPatterns as p (p.id)}
             <li class:sel={selected === p.id}>
@@ -428,6 +505,25 @@
     </aside>
   </main>
 
+  {#if explanation}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="backdrop" onclick={() => (explanation = null)}></div>
+    <div class="explainer" role="dialog" aria-modal="true" aria-labelledby="explain-title">
+      <div class="ehead">
+        <h2 id="explain-title">{explanation.title}</h2>
+        <button class="ghost" onclick={copyExplanation}>{copied ? 'Copied' : 'Copy'}</button>
+        <button class="ghost" aria-label="Close" onclick={() => (explanation = null)}>×</button>
+      </div>
+      <p class="summary">{explanation.summary}</p>
+      {#each explanation.items as it (it.id)}
+        <article class:sel={selected === it.id}>
+          <h3><button class="link" title="Show on the chart" onclick={() => selectPattern(it.id)}>{it.heading}</button></h3>
+          <p>{it.text}</p>
+        </article>
+      {/each}
+    </div>
+  {/if}
+
   {#if showLiq}
     {#key source}
       <LiquidationHeatmap spot={liqSpot} mode={source === 'local' ? 'synthetic' : 'live'} {theme} />
@@ -465,6 +561,20 @@
   main { flex: 1; display: flex; min-height: 0; }
   .stage { flex: 1; position: relative; min-width: 0; touch-action: none; }
   .stage :global(canvas) { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .stage.drawing { cursor: crosshair; }
+  .wintools button.on { color: var(--accent); border-color: var(--accent); }
+  .explain { margin: 4px 0 8px; }
+  .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.35); z-index: 20; }
+  .explainer { position: fixed; z-index: 21; top: 8vh; left: 50%; transform: translateX(-50%); width: min(720px, calc(100vw - 32px)); max-height: 84vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.4); }
+  .ehead { display: flex; gap: 8px; align-items: center; }
+  .ehead h2 { flex: 1; margin: 0; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .explainer .summary { color: var(--text); }
+  .explainer article { border-top: 1px solid var(--line); padding: 6px 0; }
+  .explainer article.sel h3 button { color: var(--accent); }
+  .explainer h3 { margin: 4px 0; font-size: 13px; }
+  .explainer h3 button { text-align: left; }
+  .explainer p { margin: 4px 0; line-height: 1.45; color: var(--dim); }
   .zoom { position: absolute; display: flex; justify-content: flex-end; gap: 2px; z-index: 2; }
   .zoom button { padding: 0 6px; height: 18px; line-height: 16px; font-size: 12px; min-width: 22px; background: var(--panel); color: var(--dim); }
   .zoom button:hover { color: var(--text); border-color: var(--dim); }

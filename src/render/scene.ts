@@ -2,6 +2,7 @@ import { Gfx, withAlpha, type RGBA } from './gl';
 import type { Theme } from './theme';
 import { H, LAD_BID, LAD_ASK, DEP_BID, DEP_ASK, LADDER, STATUS_NAMES } from '../shared/view';
 import type { AnalyticsOut, PatternHit } from '../patterns/types';
+import { lowerBound, type AnalysisWindow } from '../patterns/window';
 import { computeLayout, DEFAULT_LAYOUT, type LayoutPrefs, type Rect } from './layout';
 
 export interface SceneSettings {
@@ -13,6 +14,8 @@ export interface SceneSettings {
   showChartPatterns: boolean;
   showCandlePatterns: boolean;
   selectedPattern: string | null;
+  /** the box patterns are searched in, drawn over the candles */
+  analysisWindow?: AnalysisWindow | null;
   venueLabel: string;
   pairLabel: string;
 }
@@ -46,6 +49,10 @@ export class Scene {
   depthPct = 1;
   /** hit boxes of pattern labels, for clicks */
   patternBoxes: { id: string; x: number; y: number; w: number; h: number }[] = [];
+  /** the box being dragged on the candle chart, in px */
+  brush: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  /** candle chart mapping from the last frame, to turn a dragged box into times and prices */
+  private cmap: { first: number; N: number; step: number; px: number; pw: number; py: number; ph: number; lo: number; hi: number; t: Float64Array } | null = null;
 
   constructor(private g: Gfx) {}
 
@@ -83,6 +90,17 @@ export class Scene {
       g.end(t.bg, this.candles);
     }
     return anim;
+  }
+
+  /** Turn a box dragged in px into candle times and prices, or null if it spans fewer than 3 candles. */
+  windowFromPx(x0: number, y0: number, x1: number, y1: number): AnalysisWindow | null {
+    const m = this.cmap;
+    if (!m || m.N === 0) return null;
+    const idx = (x: number) => Math.min(m.N - 1, Math.max(0, m.first + Math.floor((x - m.px) / m.step)));
+    const pr = (y: number) => m.hi - ((Math.min(m.py + m.ph, Math.max(m.py, y)) - m.py) / m.ph) * (m.hi - m.lo);
+    const i0 = idx(Math.min(x0, x1)), i1 = idx(Math.max(x0, x1));
+    if (i1 - i0 < 2) return null;
+    return { t0: m.t[i0], t1: m.t[i1], p0: pr(Math.max(y0, y1)), p1: pr(Math.min(y0, y1)) };
   }
 
   paneAt(x: number, y: number): number {
@@ -323,6 +341,15 @@ export class Scene {
     }
   }
 
+  /** dashed outline of a box */
+  private frame(x0: number, y0: number, x1: number, y1: number, col: RGBA): void {
+    const g = this.g;
+    g.dashed(x0, y0, x1, y0, 1, 4, col);
+    g.dashed(x0, y1, x1, y1, 1, 4, col);
+    g.dashed(x0, y0, x0, y1, 1, 4, col);
+    g.dashed(x1, y0, x1, y1, 1, 4, col);
+  }
+
   // ---------------- candles + patterns ----------------
   private drawCandles(a: AnalyticsOut | null, v: Float64Array, ptr: { x: number; y: number; in: boolean }, s: SceneSettings, t: Theme): void {
     const g = this.g;
@@ -353,6 +380,7 @@ export class Scene {
     const X = (i: number) => px + (i - first + 0.5) * step;
     const Y = (p: number) => py + ((hi - p) / (hi - lo)) * ph;
     const pd = v[H.priceDecimals] | 0;
+    this.cmap = { first, N, step, px, pw, py, ph, lo, hi, t: a.t };
     // grid + axis
     for (let k = 0; k <= 5; k++) {
       const p = lo + ((hi - lo) * k) / 5;
@@ -386,6 +414,31 @@ export class Scene {
         g.dashed(px, Y(m), px + pw, Y(m), 1, 3, withAlpha(t.accent, 0.7));
         g.rect(r.x + r.w - axisW + 2, Y(m) - g.atlas.cellH / 2 - 1, axisW - 4, g.atlas.cellH + 2, t.accent);
         g.number(r.x + r.w - 8, Y(m) - g.atlas.cellH / 2, m, pd, t.bg, false);
+      }
+    }
+
+    // analysis window: patterns are only searched inside it
+    const w = s.analysisWindow;
+    let labelTop = py + 2; // pattern labels stack from here: the window's top when one is drawn
+    if (w) {
+      const i0 = lowerBound(a.t, Math.min(w.t0, w.t1)), i1 = lowerBound(a.t, Math.max(w.t0, w.t1) + 1) - 1;
+      const x0 = Math.max(px, X(i0) - step / 2), x1 = Math.min(px + pw, X(i1) + step / 2);
+      const y0 = Math.max(py, Y(Math.max(w.p0, w.p1))), y1 = Math.min(py + ph, Y(Math.min(w.p0, w.p1)));
+      if (x1 > x0 && y1 > y0) {
+        labelTop = y0 + 2;
+        g.rect(x0, y0, x1 - x0, y1 - y0, withAlpha(t.accent, 0.07));
+        this.frame(x0, y0, x1, y1, withAlpha(t.accent, 0.8));
+        const lbl = `WINDOW  ${a.patterns.length} PATTERN${a.patterns.length === 1 ? '' : 'S'}`;
+        if (x1 - x0 > lbl.length * g.atlas.cellW + 8) g.text(x0 + 4, y1 - g.atlas.cellH - 3, lbl, t.accent);
+      }
+    }
+    const b = this.brush;
+    if (b) {
+      const x0 = Math.max(px, Math.min(b.x0, b.x1)), x1 = Math.min(px + pw, Math.max(b.x0, b.x1));
+      const y0 = Math.max(py, Math.min(b.y0, b.y1)), y1 = Math.min(py + ph, Math.max(b.y0, b.y1));
+      if (x1 > x0 && y1 > y0) {
+        g.rect(x0, y0, x1 - x0, y1 - y0, withAlpha(t.accent, 0.12));
+        this.frame(x0, y0, x1, y1, t.accent);
       }
     }
 
@@ -437,7 +490,7 @@ export class Scene {
       // label at the start of the pattern
       const lx = Math.max(px, X(p.start));
       const lbl = `${p.label} ${p.status === 'confirmed' ? '+' : p.status === 'failed' ? 'x' : '~'}`;
-      const ly = py + 2 + (labelRow++ % 6) * (g.atlas.cellH + 3);
+      const ly = labelTop + (labelRow++ % 6) * (g.atlas.cellH + 3);
       const lw = lbl.length * g.atlas.cellW + 8;
       g.rect(lx, ly, lw, g.atlas.cellH + 2, withAlpha(sel ? t.accent : col, sel ? 0.9 : 0.25));
       g.text(lx + 4, ly + 1, lbl, sel ? t.bg : t.text);

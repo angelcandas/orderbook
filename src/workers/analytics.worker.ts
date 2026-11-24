@@ -1,6 +1,8 @@
 /// <reference lib="webworker" />
 import type { Candle } from '../patterns/candle';
-import { detect } from '../patterns/detect';
+import { detect, type Detection } from '../patterns/detect';
+import { toSeries } from '../patterns/series';
+import { detectInWindow, type AnalysisWindow } from '../patterns/window';
 import type { AnalyticsOut } from '../patterns/types';
 import type { Venue } from '../shared/config';
 import { MAX_BARS, prepend, stepOf } from '../feeds/history';
@@ -17,7 +19,16 @@ let renderPort: MessagePort | null = null;
 let dirty = false;
 let timer: any = null;
 let lastClosedCount = -1;
-let cached: ReturnType<typeof detect> | null = null;
+let cached: Detection | null = null;
+/** the box drawn on the candle chart; patterns are searched inside it only */
+let win: AnalysisWindow | null = null;
+
+/** Indicators over everything, patterns over the window when one is drawn. */
+function run(candles: Candle[]): Detection {
+  if (!win) return detect(candles);
+  const inside = detectInWindow(candles, win);
+  return { series: toSeries(candles), patterns: inside?.patterns ?? [], outcomes: inside?.outcomes ?? [] };
+}
 
 function upsert(list: Candle[], c: Candle): void {
   const last = list[list.length - 1];
@@ -40,7 +51,7 @@ function compute(): void {
   // patterns only change when a candle closes; the forming candle only moves price
   const closedCount = candles.length && !candles[candles.length - 1].closed ? candles.length - 1 : candles.length;
   const fresh = !cached || closedCount !== lastClosedCount;
-  const d = fresh ? detect(candles) : cached!;
+  const d = fresh ? run(candles) : cached!;
   if (fresh) { cached = d; lastClosedCount = closedCount; }
   const n = candles.length;
   const out: AnalyticsOut = {
@@ -55,8 +66,15 @@ function compute(): void {
     out.t[i] = k.t; out.o[i] = k.o; out.h[i] = k.h; out.l[i] = k.l; out.c[i] = k.c; out.v[i] = k.v;
   }
   out.computeMs = performance.now() - t0;
+  const times = fresh ? new Float64Array(out.t) : null; // copied before out.t is transferred
   renderPort.postMessage(out, [out.t.buffer, out.o.buffer, out.h.buffer, out.l.buffer, out.c.buffer, out.v.buffer]);
-  if (fresh) postMessage({ type: 'patterns', venue, symbol, patterns: d.patterns, outcomes: d.outcomes, computeMs: out.computeMs, candles: n, backfill: series[venue].backfill, source: series[venue].source });
+  if (times) {
+    postMessage({
+      type: 'patterns', venue, symbol, patterns: d.patterns, outcomes: d.outcomes, computeMs: out.computeMs, candles: n,
+      backfill: series[venue].backfill, source: series[venue].source,
+      window: win, t: times, last: n ? candles[n - 1].c : NaN,
+    }, [times.buffer]);
+  }
 }
 
 function schedule(): void {
@@ -100,6 +118,10 @@ self.onmessage = (e: MessageEvent) => {
     for (const p of m.feedPorts as MessagePort[]) p.onmessage = onFeed;
   } else if (m.type === 'venue') {
     venue = m.venue;
+    cached = null;
+    schedule();
+  } else if (m.type === 'window') {
+    win = m.window;
     cached = null;
     schedule();
   } else if (m.type === 'reset') {
