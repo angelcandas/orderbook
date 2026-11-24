@@ -246,7 +246,9 @@ export class Engine {
   resize(w: number, h: number): void { this.render.postMessage({ type: 'resize', w, h, dpr: devicePixelRatio }); }
   pointer(x: number, y: number, inside: boolean): void { this.render.postMessage({ type: 'pointer', x, y, in: inside }); }
   click(x: number, y: number): void { this.render.postMessage({ type: 'click', x, y }); }
-  wheel(x: number, y: number, dy: number): void { this.render.postMessage({ type: 'wheel', x, y, dy }); }
+  wheel(x: number, y: number, dy: number, shift = false): void { this.render.postMessage({ type: 'wheel', x, y, dy, shift }); }
+  /** Zoom one candle chart axis by `factor` (>1 = in), or reset it with 0. */
+  candleScale(axis: 'x' | 'y', factor: number): void { this.render.postMessage({ type: 'candleScale', axis, factor }); }
   zoom(pane: ZoomPane, dir: 1 | -1 | 0): void { this.render.postMessage({ type: 'zoom', pane, dir }); }
   setLayout(layout: LayoutPrefs): void { this.o.layout = layout; this.render.postMessage({ type: 'layout', layout }); }
   setFont(px: number): void { this.o.fontPx = px; this.render.postMessage({ type: 'font', px }); }
