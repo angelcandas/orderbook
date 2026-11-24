@@ -82,6 +82,19 @@ that domain to the Pages project through the Cloudflare API; the
   per-message path. A hit shows an in-app toast and, if allowed, a desktop
   notification. A pair with an armed alert stays subscribed even when it is not
   on screen. A move that reverses within 200 ms can be missed.
+- **Liquidation worker** (`src/workers/liquidation.worker.ts`) is separate from
+  the book path: its own socket to Binance USD-M futures (`aggTrade` and
+  `forceOrder` for the focused pair) and its own canvas. Kraken spot has no
+  liquidations, so the panel always shows the Binance perpetual. Dots are real
+  liquidations. The heat is an estimate, as on every public liquidation
+  heatmap: open-interest increases (polled every 5 s) become new positions at
+  the prices traded in that interval, spread over 10/25/50/100x leverage, with
+  longs liquidating below entry and shorts above; levels clear when price
+  trades through them and shrink pro rata when open interest falls
+  (`src/liquidation/model.ts`). The heat is a one-pixel-per-cell image written
+  a column per second and scaled with one `drawImage`, so a full redraw costs
+  well under a millisecond. With `?src=local` it runs on a synthetic market.
+  Hide it with the Options toggle or `?liq=0`.
 
 ## Measurements
 
