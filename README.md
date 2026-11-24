@@ -151,8 +151,10 @@ update id, then the recorded messages unchanged.
 The plan left six decisions open. These are the defaults taken to get going;
 each is easy to change.
 
-1. UI shell: **Svelte 5**, the lighter of the recommended pair. The hot path is
-   framework free.
+1. UI shell: **React 19** (Angel's pick, 24 Nov 2026: the framework exchange
+   frontend teams know best). It started as Svelte 5 and was ported with every
+   feature and saved setting kept. The hot path is framework free either way:
+   the feed, analytics and render workers never touch React.
 2. Renderer: **WebGL2**, WebGPU later behind a flag.
 3. First release extras: the benchmark corpus and replay, receive-to-pixel
    latency, the visible integrity panel and graceful overload. All but

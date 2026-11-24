@@ -1,0 +1,19 @@
+/* Scoped to the alerts panel (.alerts); the app's own rules stop at .scope. */
+.alerts h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 14px 0 6px; display: flex; align-items: center; gap: 8px; }
+.alerts .add { display: flex; gap: 6px; }
+.alerts .add input { flex: 1; min-width: 0; font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+.alerts select, .alerts button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+.alerts button:disabled { opacity: 0.5; cursor: default; }
+.alerts .link { border: 0; background: none; color: var(--accent); padding: 0; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.alerts .dim { color: var(--dim); }
+.alerts .small { font-size: 12px; }
+.alerts p { margin: 4px 0; }
+.alerts .list { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; }
+.alerts .list li { display: flex; align-items: flex-start; gap: 8px; padding: 3px 2px; }
+.alerts .list li.fired { opacity: 0.65; }
+.alerts .what { flex: 1; }
+.alerts .arrow { color: var(--ask); width: 10px; }
+.alerts .arrow.up { color: var(--bid); }
+.alerts .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; max-width: min(360px, calc(100vw - 32px)); }
+.alerts .toast { display: flex; gap: 10px; align-items: flex-start; background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; box-shadow: 0 4px 16px rgb(0 0 0 / 0.3); font-size: 13px; }
+.alerts .toast span { flex: 1; }

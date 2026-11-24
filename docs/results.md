@@ -59,3 +59,32 @@ What this shows:
 | --- | --- | --- |
 | Quads expanded to triangles instead of instanced draws (SwiftShader costs about 25 µs per instance) | 101 ms frames | 17.9 ms frames |
 | Per-pane redraw, unchanged panes keep their pixels | all panes every frame | only changed panes |
+
+### Page shell ported from Svelte to React (24 Nov 2026)
+
+The shell around the canvas (top bar, toolbar, side panel, dialogs) moved to
+React 19. The feed, analytics, liquidation and render workers are untouched:
+their built bundles are byte for byte the same before and after. Same cloud
+VM, `npm run bench -- --seconds 8 --warmup 3 --only "10k/s,100k/s"`, two runs
+of each build back to back:
+
+| Scenario | Svelte: frame p99 · slow frames · render CPU p99 | React: frame p99 · slow frames · render CPU p99 |
+| --- | --- | --- |
+| 10 pairs, 10k/s | 17.9 ms · 0.63–0.84% · 1.22–1.33 ms | 17.9 ms · 0.21–0.42% · 1.22 ms |
+| 25 pairs, 100k/s | 17.9 ms · 0.63% · 1.22 ms | 16.7–17.9 ms · 0.00–0.63% · 1.45 ms |
+| 10 pairs, 10k/s, CPU 4x slower | 33.3 ms · 1.05–2.35% · 1.33–1.58 ms | 17.9 ms · 0.63–0.84% · 1.33–1.45 ms |
+
+Main thread work, from Chrome's performance counters over 15 s at 25 pairs and
+50,000 level changes per second with the pointer moving over the charts:
+
+| | Svelte | React |
+| --- | ---: | ---: |
+| Script time per second | 19–22 ms | 20–24 ms |
+| JS heap at the end | 11.5 MB | 4.5 MB |
+| Long animation frames | 0 | 0 |
+
+A first cut that kept the live readouts in the shell's own state re-rendered
+the whole page four times a second and doubled main thread script time (about
+38 ms per second). The engine's 1 Hz stats and 4 Hz book read now sit in small
+stores outside React (`src/ui/live.ts`), and only the ticker, status chips,
+book table and side panel tabs that show them re-render.

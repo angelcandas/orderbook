@@ -1,0 +1,17 @@
+/* Scoped to the indicator list (.ind); the app's own rules stop at .scope. */
+.ind ul { list-style: none; margin: 0; padding: 0; }
+.ind li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.ind li.off .name { color: var(--dim); }
+.ind .row { display: flex; align-items: center; gap: 6px; }
+.ind .name { flex: 1; font-size: 13px; cursor: help; }
+.ind .swatch { width: 14px; height: 14px; padding: 0; border-radius: 3px; border: 1px solid var(--line); flex: none; }
+.ind .x { border: 0; background: none; color: var(--dim); padding: 0 4px; font-size: 15px; line-height: 1; }
+.ind .x:hover { color: var(--ask); }
+.ind .params { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 3px 0 2px 22px; }
+.ind .params label { display: inline-flex; align-items: center; color: var(--dim); font-size: 11px; gap: 4px; }
+.ind .params input { width: 58px; font: inherit; font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+.ind .add { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.ind .add select { flex: 1; min-width: 0; }
+.ind .link { border: 0; background: none; color: var(--accent); padding: 0; font-size: 12px; }
+.ind .dim { color: var(--dim); }
+.ind .small { font-size: 12px; }

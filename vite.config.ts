@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import { svelte } from '@sveltejs/vite-plugin-svelte';
+import react from '@vitejs/plugin-react';
 
 // Cross-origin isolation is required for SharedArrayBuffer and
 // performance.measureUserAgentSpecificMemory. Production hosting must send the
@@ -10,7 +10,7 @@ const isolation = {
 };
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [react()],
   server: { headers: isolation },
   preview: { headers: isolation },
   worker: { format: 'es' },
