@@ -64,6 +64,19 @@ that domain to the Pages project through the Cloudflare API; the
   is skipped entirely when nothing changed.
 - **Analytics worker** turns candles into EMA(20/50), ATR(14) and patterns
   ([docs/patterns.md](docs/patterns.md)) when a candle closes.
+- **Liquidation worker** (`src/workers/liquidation.worker.ts`) is separate from
+  the book path: its own socket to Binance USD-M futures (`aggTrade` and
+  `forceOrder` for the focused pair) and its own canvas. Kraken spot has no
+  liquidations, so the panel always shows the Binance perpetual. Dots are real
+  liquidations. The heat is an estimate, as on every public liquidation
+  heatmap: open-interest increases (polled every 5 s) become new positions at
+  the prices traded in that interval, spread over 10/25/50/100x leverage, with
+  longs liquidating below entry and shorts above; levels clear when price
+  trades through them and shrink pro rata when open interest falls
+  (`src/liquidation/model.ts`). The heat is a one-pixel-per-cell image written
+  a column per second and scaled with one `drawImage`, so a full redraw costs
+  well under a millisecond. With `?src=local` it runs on a synthetic market.
+  Hide it with the Options toggle or `?liq=0`.
 
 ## Measurements
 

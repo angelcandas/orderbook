@@ -4,6 +4,7 @@
   import { PAIRS, INTERVALS, LIVE, localEndpoints, type Interval, type Venue } from '../shared/config';
   import type { SceneSettings } from '../render/scene';
   import type { PatternHit } from '../patterns/types';
+  import LiquidationHeatmap from './LiquidationHeatmap.svelte';
 
   const q = new URLSearchParams(location.search);
   let source = $state<'live' | 'local'>(q.get('src') === 'local' ? 'local' : 'live');
@@ -18,6 +19,7 @@
   let showCandle = $state(true);
   let reducedMotion = $state(matchMedia('(prefers-reduced-motion: reduce)').matches);
   let showTable = $state(false);
+  let showLiq = $state(q.get('liq') !== '0');
   let selected = $state<string | null>(null);
 
   let stats = $state<Snapshot | null>(null);
@@ -58,6 +60,7 @@
   function syncUrl() {
     const p = new URLSearchParams({ src: source, venue, pair: PAIRS[pair].label, group: String(group), interval: String(interval), pairs: String(load), theme });
     if (source === 'local') p.set('host', host);
+    if (!showLiq) p.set('liq', '0');
     history.replaceState(null, '', `?${p}`);
   }
 
@@ -239,11 +242,18 @@
         <h2>Options</h2>
         <label class="tog"><input type="checkbox" bind:checked={reducedMotion} onchange={() => engine?.setSettings({ reducedMotion })} /> Reduce motion (no flashes)</label>
         <label class="tog"><input type="checkbox" bind:checked={showTable} /> Show text table</label>
+        <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={syncUrl} /> Liquidation heatmap</label>
         <button class="link" onclick={() => engine?.setSettings({ depthRangePct: 0 })}>Auto-fit depth chart</button>
         <p class="dim small">Scroll over the depth chart or candles to zoom. Click a pattern label to select it.</p>
       </section>
     </aside>
   </main>
+
+  {#if showLiq}
+    {#key source}
+      <LiquidationHeatmap spot={PAIRS[pair].binance} mode={source === 'local' ? 'synthetic' : 'live'} {theme} />
+    {/key}
+  {/if}
 
   <section class="table" class:sr-only={!showTable} aria-label="Order book table">
     <h2>{venue} {PAIRS[pair].label} order book ({table?.status ?? '…'})</h2>
