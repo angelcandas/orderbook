@@ -4,6 +4,8 @@
   import { PAIRS, INTERVALS, LIVE, localEndpoints, type Interval, type Venue } from '../shared/config';
   import type { SceneSettings } from '../render/scene';
   import type { PatternHit } from '../patterns/types';
+  import Alerts from './Alerts.svelte';
+  import { midOf } from '../alerts/alerts';
 
   const q = new URLSearchParams(location.search);
   let source = $state<'live' | 'local'>(q.get('src') === 'local' ? 'local' : 'live');
@@ -21,7 +23,8 @@
   let selected = $state<string | null>(null);
 
   let stats = $state<Snapshot | null>(null);
-  let table = $state<{ status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number } | null>(null);
+  let table = $state<ReturnType<Engine['ladder']>>(null);
+  let alertsPanel: ReturnType<typeof Alerts> | undefined = $state();
   let engine: Engine | null = null;
   let canvasHost: HTMLDivElement;
   let generation = $state(0); // remounts the canvas: a canvas can only be transferred once
@@ -46,6 +49,7 @@
     });
     engine.onStats = (s) => (stats = s);
     engine.onSelected = (id) => (selected = id);
+    alertsPanel?.attach(engine);
     (window as any).__depthline = engine;
   }
 
@@ -160,6 +164,8 @@
     </div>
 
     <aside>
+      <Alerts bind:this={alertsPanel} {venue} {pair} mid={table ? midOf(table.bestBid, table.bestAsk) : NaN} decimals={table?.decimals} />
+
       <section>
         <h2>Feed integrity <span class="pill" class:ok={focusStatus.startsWith('live')} class:bad={focusStatus.startsWith('error')}>{focusStatus}</span></h2>
         <dl class="mono">

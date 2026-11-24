@@ -2,6 +2,7 @@ import type { Endpoints, Venue } from '../shared/config';
 import type { HistSummary } from '../shared/hist';
 import type { FeedCounters } from '../feeds/types';
 import type { SceneSettings } from '../render/scene';
+import type { ArmedAlert } from '../alerts/alerts';
 
 export interface FeedInit {
   type: 'init';
@@ -18,6 +19,8 @@ export type FeedCmd =
   | FeedInit
   | { type: 'focus'; symbol: string; pair: number; /** grouping as a multiple of the tick size */ group: number }
   | { type: 'candles'; symbol: string | null; interval: number }
+  /** replaces the armed price alerts for this venue */
+  | { type: 'alerts'; list: ArmedAlert[] }
   | { type: 'stop' };
 
 export interface FeedStats {

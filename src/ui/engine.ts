@@ -5,6 +5,7 @@ import type { FeedStats, RenderStats } from '../workers/protocol';
 import type { SceneSettings } from '../render/scene';
 import type { PatternHit } from '../patterns/types';
 import type { Outcome } from '../patterns/detect';
+import { armed, type Alert, type AlertHit } from '../alerts/alerts';
 
 export interface EngineOptions {
   canvas: HTMLCanvasElement;
@@ -54,6 +55,9 @@ export class Engine {
   private local = new Float64Array(VIEW_LEN);
   onStats: (s: Snapshot) => void = () => {};
   onSelected: (id: string | null) => void = () => {};
+  onAlert: (hit: AlertHit) => void = () => {};
+  /** venue symbols each feed keeps live; alerts on other pairs wait until they are */
+  readonly liveSymbols: Record<Venue, Set<string>>;
 
   constructor(private o: EngineOptions) {
     // written out in full so the bundler can find and build each worker
@@ -70,10 +74,14 @@ export class Engine {
     const ar = new MessageChannel();
     const pairs = PAIRS.slice(0, Math.max(1, o.pairCount));
     if (!pairs.includes(PAIRS[o.pair])) pairs.push(PAIRS[o.pair]);
+    this.liveSymbols = { kraken: new Set(pairs.map((p) => p.kraken)), binance: new Set(pairs.map((p) => p.binance)) };
 
     for (const v of ['kraken', 'binance'] as Venue[]) {
       const w = this.feeds[v];
-      w.onmessage = (e) => { if (e.data.type === 'stats') this.snap.feeds[v] = e.data; };
+      w.onmessage = (e) => {
+        if (e.data.type === 'stats') this.snap.feeds[v] = e.data;
+        else if (e.data.type === 'alert') this.onAlert(e.data);
+      };
       w.postMessage({
         type: 'init', venue: v, endpoints: o.endpoints,
         symbols: pairs.map((p) => p[v]), depth: o.depth[v],
@@ -163,6 +171,10 @@ export class Engine {
   setPair(i: number): void { this.o.pair = i; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
   setGroup(g: number): void { this.o.group = g; this.applyFocus(); }
   setInterval(m: Interval): void { this.o.interval = m; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
+  /** Hand each feed the armed alerts for its venue (replaces the previous set). */
+  setAlerts(list: Alert[]): void {
+    for (const v of ['kraken', 'binance'] as Venue[]) this.feeds[v].postMessage({ type: 'alerts', list: armed(list, v) });
+  }
   setSettings(s: Partial<SceneSettings>): void { this.render.postMessage({ type: 'settings', settings: s }); }
   setTheme(t: 'dark' | 'light'): void { this.render.postMessage({ type: 'theme', theme: t }); }
   resize(w: number, h: number): void { this.render.postMessage({ type: 'resize', w, h, dpr: devicePixelRatio }); }
@@ -182,13 +194,13 @@ export class Engine {
   }
 
   /** Read the focused book for the accessible table (main thread, low rate). */
-  ladder(): { status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number } | null {
+  ladder(): { status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number; bestBid: number; bestAsk: number } | null {
     if (!this.shared) return null;
     const v = this.views[this.o.venue];
     if (!seqRead(v.seq, v.data, this.local)) return null;
     const d = this.local;
     const rows = (base: number, n: number) => Array.from({ length: Math.min(n, 15) }, (_, i) => ({ price: d[base + i * 3], qty: d[base + i * 3 + 1], cum: d[base + i * 3 + 2] }));
-    return { status: STATUS_NAMES[d[H.status]] ?? '', bids: rows(LAD_BID, d[H.nLadBid]), asks: rows(LAD_ASK, d[H.nLadAsk]), decimals: d[H.priceDecimals] };
+    return { status: STATUS_NAMES[d[H.status]] ?? '', bids: rows(LAD_BID, d[H.nLadBid]), asks: rows(LAD_ASK, d[H.nLadAsk]), decimals: d[H.priceDecimals], bestBid: d[H.bestBid], bestAsk: d[H.bestAsk] };
   }
 
   destroy(): void {

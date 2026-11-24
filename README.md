@@ -64,6 +64,12 @@ that domain to the Pages project through the Cloudflare API; the
   is skipped entirely when nothing changed.
 - **Analytics worker** turns candles into EMA(20/50), ATR(14) and patterns
   ([docs/patterns.md](docs/patterns.md)) when a candle closes.
+- **Price alerts** (`src/alerts/`): levels set in the side panel are kept in
+  localStorage and handed to the feed worker of their venue, which checks the
+  mid price of each live book every 200 ms on its own timer, never inside the
+  per-message path. A hit shows an in-app toast and, if allowed, a desktop
+  notification. Alerts only watch pairs the feed keeps live (the Load setting
+  plus the selected pair), and a move that reverses within 200 ms can be missed.
 
 ## Measurements
 
