@@ -9,6 +9,7 @@
   import PairPicker from './PairPicker.svelte';
   import type { SceneSettings } from '../render/scene';
   import type { PatternHit } from '../patterns/types';
+  import LiquidationHeatmap from './LiquidationHeatmap.svelte';
   import { HEADER_CTRL_W } from '../render/scene';
   import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs } from '../render/layout';
   import type { ZoomPane } from '../workers/protocol';
@@ -35,6 +36,9 @@
   let showCandle = $state(true);
   let reducedMotion = $state(matchMedia('(prefers-reduced-motion: reduce)').matches);
   let showTable = $state(false);
+  let showLiq = $state(q.get('liq') !== '0');
+  // futures are quoted in USDT whatever the spot quote: BTC/USD, BTC/EUR -> BTCUSDT
+  let liqSpot = $derived(`${splitLabel(pair)?.base ?? 'BTC'}USDT`);
   let selected = $state<string | null>(null);
 
   // layout + zoom, remembered in this browser ($state.raw: plain objects, so they can be posted to the worker)
@@ -96,6 +100,7 @@
   function syncUrl() {
     const p = new URLSearchParams({ src: source, venue, pair, group: String(group), interval: String(interval), pairs: String(load), theme });
     if (source === 'local') p.set('host', host);
+    if (!showLiq) p.set('liq', '0');
     history.replaceState(null, '', `?${p}`);
   }
 
@@ -405,6 +410,7 @@
         <h2>Options</h2>
         <label class="tog"><input type="checkbox" bind:checked={reducedMotion} onchange={() => engine?.setSettings({ reducedMotion })} /> Reduce motion (no flashes)</label>
         <label class="tog"><input type="checkbox" bind:checked={showTable} /> Show text table</label>
+        <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={syncUrl} /> Liquidation heatmap</label>
         <label class="tog">Text size
           <select bind:value={fontPx} onchange={setFont}>
             {#each Array.from({ length: ZOOM.font.max - ZOOM.font.min + 1 }, (_, i) => ZOOM.font.min + i) as px}<option value={px}>{px}px</option>{/each}
@@ -415,6 +421,12 @@
       </section>
     </aside>
   </main>
+
+  {#if showLiq}
+    {#key source}
+      <LiquidationHeatmap spot={liqSpot} mode={source === 'local' ? 'synthetic' : 'live'} {theme} />
+    {/key}
+  {/if}
 
   <section class="table" class:sr-only={!showTable} aria-label="Order book table">
     <h2>{venue} {res ? `${res.base}/${res.quote}` : pair} order book ({table?.status ?? '…'})</h2>
