@@ -55,6 +55,8 @@ export interface RenderInit {
   shared: boolean;
   feedPorts: { kraken: MessagePort; binance: MessagePort };
   analyticsPort: MessagePort;
+  /** liquidation level columns from the liquidation worker */
+  liqPort?: MessagePort;
   settings: SceneSettings;
   theme: 'dark' | 'light';
   layout?: LayoutPrefs;
