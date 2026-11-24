@@ -68,9 +68,11 @@ export type RenderCmd =
   | { type: 'venue'; venue: Venue }
   | { type: 'pointer'; x: number; y: number; in: boolean }
   | { type: 'click'; x: number; y: number }
-  | { type: 'wheel'; x: number; y: number; dy: number }
   /** dir: +1 zoom in, -1 zoom out, 0 back to the default */
   | { type: 'zoom'; pane: ZoomPane; dir: 1 | -1 | 0 }
+  /** candle chart axis zoom: multiply by factor (>1 zooms in); factor 0 resets that axis */
+  | { type: 'candleScale'; axis: 'x' | 'y'; factor: number }
+  | { type: 'wheel'; x: number; y: number; dy: number; shift?: boolean }
   | { type: 'layout'; layout: LayoutPrefs }
   | { type: 'font'; px: number }
   | { type: 'settings'; settings: Partial<SceneSettings> }
@@ -79,7 +81,7 @@ export type RenderCmd =
 
 export type ZoomPane = 'ladder' | 'depth' | 'candles';
 /** Sent by the render worker after a zoom so the page can remember it. */
-export interface ZoomState { type: 'zoom'; candlesVisible: number; depthRangePct: number; ladderRowPad: number }
+export interface ZoomState { type: 'zoom'; candlesVisible: number; depthRangePct: number; ladderRowPad: number; candlesPriceScale: number }
 
 export interface RenderStats {
   type: 'stats';
