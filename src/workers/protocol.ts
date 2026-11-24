@@ -1,3 +1,4 @@
+import type { Market } from '../shared/pairs';
 import type { Endpoints, Venue } from '../shared/config';
 import type { HistSummary } from '../shared/hist';
 import type { FeedCounters } from '../feeds/types';
@@ -17,7 +18,10 @@ export interface FeedInit {
 export type FeedCmd =
   | FeedInit
   | { type: 'focus'; symbol: string; pair: number; /** grouping as a multiple of the tick size */ group: number }
-  | { type: 'candles'; symbol: string | null; interval: number }
+  /** the books to keep live; the feed diffs it against what it has and resubscribes in place */
+  | { type: 'symbols'; symbols: string[] }
+  /** `alt`: the same pair's Binance symbol, which Kraken backfills older candles from */
+  | { type: 'candles'; symbol: string | null; interval: number; alt?: string | null }
   | { type: 'stop' };
 
 export interface FeedStats {
@@ -33,6 +37,9 @@ export interface FeedStats {
   status: Record<string, string>;
   books: number;
 }
+
+/** everything a venue lists, sent once per connection for the pair picker */
+export interface FeedMarkets { type: 'markets'; venue: Venue; markets: Market[] }
 
 export interface RenderInit {
   type: 'init';

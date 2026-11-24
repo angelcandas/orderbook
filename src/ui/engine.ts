@@ -1,5 +1,6 @@
 import { allocView, sabSupported, H, LAD_ASK, LAD_BID, VIEW_LEN, seqRead, STATUS_NAMES } from '../shared/view';
 import { PAIRS, type Endpoints, type Interval, type Venue } from '../shared/config';
+import { MarketIndex, liveSymbols, type Catalog, type Market, type Resolved } from '../shared/pairs';
 import { Histogram, type HistSummary } from '../shared/hist';
 import type { FeedStats, RenderStats } from '../workers/protocol';
 import type { SceneSettings } from '../render/scene';
@@ -12,7 +13,10 @@ export interface EngineOptions {
   pairCount: number; // how many pairs each venue keeps live (load)
   depth: { kraken: number; binance: number };
   venue: Venue;
-  pair: number;
+  /** common label, e.g. "ETH/EUR"; each venue resolves it to its own symbol */
+  pair: string;
+  /** what each venue lists; starts as the cache or the built in pairs, updated as venues answer */
+  catalog: Catalog;
   group: number;
   interval: Interval;
   settings: SceneSettings;
@@ -54,6 +58,12 @@ export class Engine {
   private local = new Float64Array(VIEW_LEN);
   onStats: (s: Snapshot) => void = () => {};
   onSelected: (id: string | null) => void = () => {};
+  /** a venue sent its full market list */
+  onMarkets: (venue: Venue, markets: Market[]) => void = () => {};
+  private idx: Record<Venue, MarketIndex>;
+  /** bumped on each pair switch; the render worker sees it in the view and redraws */
+  private focusId = 0;
+  private sent: Record<Venue, string> = { kraken: '', binance: '' };
 
   constructor(private o: EngineOptions) {
     // written out in full so the bundler can find and build each worker
@@ -68,15 +78,19 @@ export class Engine {
     const fr = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const fa = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const ar = new MessageChannel();
-    const pairs = PAIRS.slice(0, Math.max(1, o.pairCount));
-    if (!pairs.includes(PAIRS[o.pair])) pairs.push(PAIRS[o.pair]);
+    this.idx = { kraken: new MarketIndex(o.catalog.kraken), binance: new MarketIndex(o.catalog.binance) };
 
     for (const v of ['kraken', 'binance'] as Venue[]) {
       const w = this.feeds[v];
-      w.onmessage = (e) => { if (e.data.type === 'stats') this.snap.feeds[v] = e.data; };
+      w.onmessage = (e) => {
+        if (e.data.type === 'stats') this.snap.feeds[v] = e.data;
+        else if (e.data.type === 'markets') this.onMarkets(v, e.data.markets);
+      };
+      const symbols = this.symbolsFor(v);
+      this.sent[v] = symbols.join(',');
       w.postMessage({
         type: 'init', venue: v, endpoints: o.endpoints,
-        symbols: pairs.map((p) => p[v]), depth: o.depth[v],
+        symbols, depth: o.depth[v],
         view: this.views[v].buffer, shared: this.shared,
         renderPort: fr[v].port1, analyticsPort: fa[v].port1,
       }, [fr[v].port1, fa[v].port1]);
@@ -148,19 +162,60 @@ export class Engine {
     };
   }
 
-  private applyFocus(): void {
-    const p = PAIRS[this.o.pair];
+  /** the venue's market for the focused pair, or null when it doesn't list it */
+  resolved(v: Venue): Resolved | null { return this.idx[v].resolve(this.o.pair); }
+
+  /** the focused pair's book plus built in pairs up to the load setting */
+  private symbolsFor(v: Venue): string[] {
+    const builtin = PAIRS.map((p) => p[v]).filter((s) => !this.idx[v].size || this.idx[v].markets.some((m) => m.symbol === s));
+    return liveSymbols(this.resolved(v)?.symbol ?? null, builtin, this.o.pairCount);
+  }
+
+  /** tell each feed which books to keep, only when that changed */
+  private syncSymbols(): void {
     for (const v of ['kraken', 'binance'] as Venue[]) {
-      this.feeds[v].postMessage({ type: 'focus', symbol: p[v], pair: this.o.pair, group: this.o.group });
-      this.feeds[v].postMessage({ type: 'candles', symbol: v === this.o.venue ? p[v] : null, interval: this.o.interval });
+      const symbols = this.symbolsFor(v);
+      const key = symbols.join(',');
+      if (key === this.sent[v]) continue;
+      this.sent[v] = key;
+      this.feeds[v].postMessage({ type: 'symbols', symbols });
     }
+  }
+
+  private applyFocus(): void {
+    const r = { kraken: this.resolved('kraken'), binance: this.resolved('binance') };
+    for (const v of ['kraken', 'binance'] as Venue[]) {
+      const sym = r[v]?.symbol ?? '';
+      this.feeds[v].postMessage({ type: 'focus', symbol: sym, pair: this.focusId, group: this.o.group });
+      this.feeds[v].postMessage({
+        type: 'candles', symbol: v === this.o.venue && sym ? sym : null, interval: this.o.interval,
+        alt: v === 'kraken' ? r.binance?.symbol ?? null : null,
+      });
+    }
+    const here = r[this.o.venue];
+    const label = here ? `${here.base}/${here.quote}` : this.o.pair;
     this.analytics.postMessage({ type: 'venue', venue: this.o.venue });
     this.render.postMessage({ type: 'venue', venue: this.o.venue });
-    this.render.postMessage({ type: 'settings', settings: { venueLabel: this.o.venue.toUpperCase(), pairLabel: p.label } });
+    this.render.postMessage({ type: 'settings', settings: { venueLabel: this.o.venue.toUpperCase(), pairLabel: label } });
   }
 
   setVenue(v: Venue): void { this.o.venue = v; this.applyFocus(); }
-  setPair(i: number): void { this.o.pair = i; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
+  /** switch pair in place: feeds resubscribe only the books that change, no reconnect */
+  setPair(label: string): void {
+    this.o.pair = label;
+    this.focusId++;
+    this.analytics.postMessage({ type: 'reset' });
+    this.syncSymbols();
+    this.applyFocus();
+  }
+  /** new market lists: re-resolve the focused pair, which may only now be listed */
+  setCatalog(c: Catalog): void {
+    const before = [this.resolved('kraken')?.symbol, this.resolved('binance')?.symbol].join();
+    this.idx = { kraken: new MarketIndex(c.kraken), binance: new MarketIndex(c.binance) };
+    const after = [this.resolved('kraken')?.symbol, this.resolved('binance')?.symbol].join();
+    this.syncSymbols();
+    if (before !== after) { this.focusId++; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
+  }
   setGroup(g: number): void { this.o.group = g; this.applyFocus(); }
   setInterval(m: Interval): void { this.o.interval = m; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
   setSettings(s: Partial<SceneSettings>): void { this.render.postMessage({ type: 'settings', settings: s }); }

@@ -100,7 +100,7 @@ function onKraken(ws: WebSocket) {
       ack({ channel: 'instrument' });
       ws.send(JSON.stringify({
         channel: 'instrument', type: 'snapshot',
-        data: { assets: [], pairs: [...ksims.values()].map((s) => ({ symbol: s.inst.symbol, price_increment: s.inst.tickSize, price_precision: s.inst.priceDecimals, qty_precision: s.inst.qtyDecimals, status: 'online' })) },
+        data: { assets: [], pairs: [...ksims.values()].map((s) => ({ symbol: s.inst.symbol, base: s.inst.symbol.split('/')[0], quote: s.inst.symbol.split('/')[1], price_increment: s.inst.tickSize, price_precision: s.inst.priceDecimals, qty_precision: s.inst.qtyDecimals, status: 'online' })) },
       }));
     } else if (p.channel === 'book') {
       for (const sym of p.symbol) {
@@ -170,6 +170,9 @@ function binanceRest(url: URL, res: http.ServerResponse) {
     return send(200, {
       symbols: [...bsims.values()].filter((s) => !want.length || want.includes(s.inst.symbol)).map((s) => ({
         symbol: s.inst.symbol,
+        status: 'TRADING',
+        baseAsset: s.inst.symbol.replace(/USDT$/, ''),
+        quoteAsset: 'USDT',
         filters: [
           { filterType: 'PRICE_FILTER', tickSize: s.inst.tickSize.toFixed(s.inst.priceDecimals) },
           { filterType: 'LOT_SIZE', stepSize: (10 ** -s.inst.qtyDecimals).toFixed(s.inst.qtyDecimals) },
