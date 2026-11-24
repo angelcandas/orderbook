@@ -1,17 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import type { Engine } from './engine';
-  import { PAIRS, type Venue } from '../shared/config';
+  import type { Venue } from '../shared/config';
   import { STORAGE_KEY, inferDirection, loadAlerts, newId, parseAlerts, saveAlerts, type Alert, type AlertHit, type Direction } from '../alerts/alerts';
   import { fmtPrice, priceDigits, permission, requestPermission, systemNotify, type Permission } from '../alerts/notify';
 
-  let { venue, pair, mid, decimals }: { venue: Venue; pair: number; mid: number; decimals?: number } = $props();
+  let { venue, label, symbol, mid, decimals }: { venue: Venue; label: string; symbol: string | null; mid: number; decimals?: number } = $props();
 
   let list = $state<Alert[]>(loadAlerts());
   let level = $state<number | null>(null);
   let dir = $state<'auto' | Direction>('auto');
   let perm = $state<Permission>(permission());
-  let live = $state<Record<Venue, Set<string>>>({ kraken: new Set(), binance: new Set() });
   let toasts = $state<{ key: string; text: string }[]>([]);
   let engine: Engine | null = null;
   const toastTimers = new Set<any>();
@@ -19,7 +18,6 @@
   /** Called by the app each time it starts an engine. */
   export function attach(e: Engine): void {
     engine = e;
-    live = e.liveSymbols;
     e.onAlert = fired;
     e.setAlerts($state.snapshot(list) as Alert[]);
   }
@@ -31,13 +29,11 @@
   }
 
   const venueName = (v: Venue) => (v === 'kraken' ? 'Kraken' : 'Binance');
-  const sym = $derived(PAIRS[pair][venue]);
-  const label = $derived(PAIRS[pair].label);
   const effectiveDir = $derived<Direction>(dir === 'auto' ? inferDirection(level ?? NaN, mid) : dir);
 
   function add(): void {
-    if (level == null || !Number.isFinite(level) || level <= 0) return;
-    list.push({ id: newId(), venue, symbol: sym, label, price: level, dir: effectiveDir, created: Date.now() });
+    if (!symbol || level == null || !Number.isFinite(level) || level <= 0) return;
+    list.push({ id: newId(), venue, symbol, label, price: level, dir: effectiveDir, created: Date.now() });
     level = null;
     commit();
   }
@@ -107,7 +103,7 @@
       <option value="above">above</option>
       <option value="below">below</option>
     </select>
-    <button type="submit" disabled={level == null || !(level > 0)}>Add</button>
+    <button type="submit" disabled={!symbol || level == null || !(level > 0)}>Add</button>
   </form>
   <p class="dim small">For {label} on {venueName(venue)}, checked against the mid price five times a second while the book is live.</p>
   {#if perm === 'default'}
@@ -124,7 +120,7 @@
           <span class="arrow" class:up={a.dir === 'above'} aria-label={a.dir}>{a.dir === 'above' ? '▲' : '▼'}</span>
           <span class="what"><span class="mono">{fmtPrice(a.price)}</span> <span class="dim">{a.label} · {venueName(a.venue)}</span>
             {#if a.firedAt !== undefined}<br /><span class="dim small">fired {time(a.firedAt)} at {fmtPrice(a.firedPrice ?? NaN)}</span>
-            {:else if !live[a.venue].has(a.symbol)}<br /><span class="dim small">waiting: pair not loaded, raise Load or pick it</span>{/if}
+{/if}
           </span>
           {#if a.firedAt !== undefined}<button class="link" onclick={() => rearm(a)}>re-arm</button>{/if}
           <button class="link" onclick={() => remove(a.id)} aria-label={`Remove alert ${a.label} ${a.dir} ${a.price}`}>✕</button>

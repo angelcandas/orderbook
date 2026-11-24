@@ -22,6 +22,18 @@ npm run emulator -- --rate 20000 --pairs 10   # level changes per second, per ve
 # then open http://localhost:5173/?src=local
 ```
 
+## Pairs and favourites
+
+The Pair picker lists every pair either venue trades, read from the venues
+themselves (Kraken's `instrument` channel, Binance's `exchangeInfo`, both in the
+feed workers) and cached for a day. Type to search (`eth`, `eth/eur`,
+`sol usdt`), filter by quote, and star pairs to keep them as one click chips in
+the header; favourites live in `localStorage`. Each venue maps the pair to its
+own symbol (`ETH/EUR` is `ETH/EUR` on Kraken, `ETHEUR` on Binance). Where a
+venue has no exact listing, USD, USDT and USDC stand in for each other and the
+panel says so; otherwise the book shows "not listed". Switching pair
+resubscribes only the books that change on the open sockets, with no reconnect.
+
 ## Deploy
 
 Pushes to `main` build the app and deploy it to Cloudflare Pages (project
@@ -68,8 +80,8 @@ that domain to the Pages project through the Cloudflare API; the
   localStorage and handed to the feed worker of their venue, which checks the
   mid price of each live book every 200 ms on its own timer, never inside the
   per-message path. A hit shows an in-app toast and, if allowed, a desktop
-  notification. Alerts only watch pairs the feed keeps live (the Load setting
-  plus the selected pair), and a move that reverses within 200 ms can be missed.
+  notification. A pair with an armed alert stays subscribed even when it is not
+  on screen. A move that reverses within 200 ms can be missed.
 
 ## Measurements
 

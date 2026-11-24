@@ -2,6 +2,7 @@ import { Book, decimalsOfIncrement, type Instrument } from '../engine/book';
 import { Status } from '../shared/view';
 import { nowAbs } from '../shared/hist';
 import { binanceHistory, klineRows, HISTORY_BARS } from './history';
+import { binanceMarkets } from '../shared/pairs';
 import { newCounters, type Fetcher, type FeedSink, type SocketFactory, type SocketLike } from './types';
 
 interface SymState {
@@ -43,7 +44,7 @@ export class BinanceFeed {
   async start(): Promise<void> {
     this.closed = false;
     for (const s of this.symbols) this.sink.onStatus(s, Status.Connecting);
-    if (this.st.size === 0) await this.loadInstruments();
+    await this.loadInstruments(this.symbols.filter((s) => !this.st.has(s)));
     const streams = [...this.st.keys()].map((s) => `${s.toLowerCase()}@depth@100ms`);
     if (this.kline) streams.push(`${this.kline.symbol.toLowerCase()}@kline_${this.kline.interval}`);
     const ws = (this.ws = this.socket(`${this.wsBase}/stream?streams=${streams.join('/')}`));
@@ -88,17 +89,64 @@ export class BinanceFeed {
     }
   }
 
-  private async loadInstruments(): Promise<void> {
-    const q = encodeURIComponent(JSON.stringify(this.symbols));
+  /**
+   * Change the books kept live without reconnecting: UNSUBSCRIBE the streams
+   * dropped, then fetch instruments for the new ones, SUBSCRIBE their diff
+   * streams and sync each against a REST snapshot as on connect.
+   */
+  async setSymbols(symbols: string[]): Promise<void> {
+    const next = [...new Set(symbols)];
+    const gone = this.symbols.filter((s) => !next.includes(s));
+    const added = next.filter((s) => !this.symbols.includes(s));
+    this.symbols = next;
+    const ws = this.ws;
+    const open = ws?.readyState === 1;
+    if (gone.length) {
+      if (open) ws!.send(JSON.stringify({ method: 'UNSUBSCRIBE', params: gone.map((s) => `${s.toLowerCase()}@depth@100ms`), id: this.id++ }));
+      for (const s of gone) { this.st.delete(s); this.books.delete(s); }
+    }
+    if (!added.length) return;
+    for (const s of added) this.sink.onStatus(s, Status.Connecting);
+    if (!open) return; // start() picks up this.symbols when the socket (re)opens
+    try {
+      await this.loadInstruments(added);
+    } catch {
+      return;
+    }
+    // the user may have moved on while exchangeInfo was in flight
+    const want = added.filter((s) => this.symbols.includes(s) && this.st.has(s));
+    if (!want.length || this.ws !== ws || ws!.readyState !== 1) return;
+    ws!.send(JSON.stringify({ method: 'SUBSCRIBE', params: want.map((s) => `${s.toLowerCase()}@depth@100ms`), id: this.id++ }));
+    want.forEach((sym, i) => {
+      this.sink.onStatus(sym, Status.Syncing);
+      // let a few diffs buffer first, so the snapshot overlaps the stream
+      setTimeout(() => this.snapshot(sym), 300 + i * 120);
+    });
+  }
+
+  /** Every trading spot symbol, for the pair picker. Large (a few MB), so fetched once, off the main thread. */
+  async loadMarkets(): Promise<void> {
+    try {
+      const info = await this.fetchJson(`${this.restBase}/api/v3/exchangeInfo?symbolStatus=TRADING&showPermissionSets=false`);
+      this.sink.onMarkets?.(binanceMarkets(info));
+    } catch (e) {
+      this.sink.log(`binance market list failed: ${e}`);
+    }
+  }
+
+  private async loadInstruments(symbols: string[]): Promise<void> {
+    if (!symbols.length) return;
+    const q = encodeURIComponent(JSON.stringify(symbols));
     let info: any;
     try {
       info = await this.fetchJson(`${this.restBase}/api/v3/exchangeInfo?symbols=${q}`);
     } catch (e) {
       this.sink.log(`binance exchangeInfo failed: ${e}`);
-      for (const s of this.symbols) this.sink.onStatus(s, Status.Error, 'exchangeInfo failed');
+      for (const s of symbols) this.sink.onStatus(s, Status.Error, 'exchangeInfo failed');
       throw e;
     }
     for (const s of info.symbols ?? []) {
+      if (this.st.has(s.symbol)) continue;
       const pf = s.filters.find((f: any) => f.filterType === 'PRICE_FILTER');
       const lf = s.filters.find((f: any) => f.filterType === 'LOT_SIZE');
       const inst: Instrument = {
@@ -111,7 +159,7 @@ export class BinanceFeed {
       this.books.set(s.symbol, book);
       this.st.set(s.symbol, { book, phase: 'buffering', buffer: [], lastId: 0, attempts: 0 });
     }
-    for (const s of this.symbols) if (!this.st.has(s)) this.sink.onStatus(s, Status.Error, 'unknown symbol');
+    for (const s of symbols) if (!this.st.has(s)) this.sink.onStatus(s, Status.Error, 'unknown symbol');
   }
 
   private async snapshot(sym: string): Promise<void> {
@@ -127,7 +175,7 @@ export class BinanceFeed {
       setTimeout(() => this.snapshot(sym), Math.min(30_000, 1000 * 2 ** s.attempts));
       return;
     }
-    if (s.phase !== 'fetching') return;
+    if (s.phase !== 'fetching' || this.st.get(sym) !== s) return; // resynced or dropped meanwhile
     const first = s.buffer[0];
     if (first && snap.lastUpdateId < first.U) {
       // snapshot older than our first buffered event: try again

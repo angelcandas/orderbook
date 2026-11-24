@@ -11,6 +11,7 @@ import { STATUS_NAMES } from '../src/shared/view';
 const statuses: Record<string, string> = {};
 let candles = 0;
 const history: Record<string, number> = {};
+const markets: Record<string, number> = {};
 const sink: FeedSink = {
   onBook() {},
   onStatus(s, st, d) { statuses[s] = STATUS_NAMES[st] + (d ? ` (${d})` : ''); },
@@ -18,6 +19,7 @@ const sink: FeedSink = {
   onCandle() { candles++; },
   onHistory(s, cs, src) { history[s] = (history[s] ?? 0) + cs.length; console.log(`history ${s}: ${cs.length} older bars from ${src}`); },
   onTiming() {},
+  onMarkets(ms) { markets[ms[0]?.symbol.includes('/') ? 'kraken' : 'binance'] = ms.length; },
   log: (m) => console.log('log:', m),
 };
 const sock = (u: string) => new WebSocket(u) as any;
@@ -28,15 +30,24 @@ const k = new KrakenFeed('ws://' + HOST + '/kraken', ['BTC/USD', 'ETH/USD'], 100
   return { candles: older.concat(recent.slice(0, recent.length - snap.length)), source: 'kraken+binance' };
 });
 const b = new BinanceFeed('ws://' + HOST + '/binance', 'http://' + HOST + '/binance', ['BTCUSDT', 'ETHUSDT'], 1000, sink, sock, fetchJson);
-k.start(); b.start(); k.setOhlc('BTC/USD', 1); b.setKline('BTCUSDT', '1m');
+k.start(); b.start().then(() => b.loadMarkets()); k.setOhlc('BTC/USD', 1); b.setKline('BTCUSDT', '1m');
+// switch pair mid run, on the open sockets: ETH out, SOL in
+const kSyms = ['BTC/USD', 'SOL/USD'];
+const bSyms = ['BTCUSDT', 'SOLUSDT'];
+setTimeout(() => { k.setSymbols(kSyms); b.setSymbols(bSyms); }, 2000);
 setTimeout(() => {
+  const want = [...kSyms, ...bSyms];
+  for (const s of Object.keys(statuses)) if (!want.includes(s)) delete statuses[s];
   console.log(statuses, 'candles', candles, 'history', history);
   const filled = !NEED_CANDLES || (history['BTC/USD'] > 0 && history['BTCUSDT'] > 0);
   const bad = k.counters.checksumFails + b.counters.gaps + k.counters.crossed + b.counters.crossed;
-  const live = Object.values(statuses).every((s) => s.startsWith('live'));
+  const live = want.every((s) => statuses[s]?.startsWith('live'));
+  const switched = !k.books.has('ETH/USD') && !b.books.has('ETHUSDT') && k.books.has('SOL/USD') && b.books.has('SOLUSDT');
+  const listed = markets.kraken > 0 && markets.binance > 0;
+  console.log('switched', switched, 'markets', markets);
   console.log('kraken', k.counters);
   console.log('binance', b.counters);
   const bk = b.books.get('BTCUSDT')!;
   console.log('binance best', bk.bids.bestTick * bk.inst.tickSize, bk.asks.bestTick * bk.inst.tickSize, bk.bids.n, bk.asks.n);
-  process.exit(bad === 0 && live && (candles > 0 || !NEED_CANDLES) && filled ? 0 : 1);
+  process.exit(bad === 0 && live && switched && listed && (candles > 0 || !NEED_CANDLES) && filled ? 0 : 1);
 }, 5000);
