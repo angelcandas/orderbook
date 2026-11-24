@@ -34,6 +34,8 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run build
+      - name: Page shell smoke test (features and saved settings)
+        run: npm run test:ui
       - run: npm run bench -- --seconds 8 --warmup 3 --only "10k/s,100k/s" --out bench/results/ci.local.json
       - run: cat bench/results/ci.local.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

@@ -7,21 +7,22 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc -p . && svelte-check --threshold error",
+    "typecheck": "tsc -p .",
     "emulator": "tsx server/server.ts",
     "record": "tsx server/record.ts",
     "replay": "tsx server/replay.ts",
     "bench": "tsx bench/run.ts",
-    "test:feeds": "tsx test/feeds.integration.ts"
+    "test:feeds": "tsx test/feeds.integration.ts",
+    "test:ui": "tsx test/ui.smoke.ts"
   },
   "license": "MIT",
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^5.1.1",
     "@types/node": "^26.6.6",
+    "@types/react": "^19.3.1",
+    "@types/react-dom": "^19.3.0",
     "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^5.2.0",
     "playwright": "^1.63.0",
-    "svelte": "^5.58.0",
-    "svelte-check": "^4.7.8",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vite": "^6.4.6",
@@ -29,5 +30,9 @@
     "ws": "^8.23.0"
   },
   "type": "module",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
 }

@@ -1,0 +1,33 @@
+/* Scoped to the pair picker (.picker); the app's own rules stop at .scope. */
+.picker { position: relative; display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.picker button { font: inherit; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 4px 8px; cursor: pointer; }
+.picker button:hover { border-color: var(--line-strong); }
+.picker .current { display: inline-flex; gap: 8px; align-items: center; min-width: 112px; justify-content: space-between; height: 32px;
+  font-size: 15px; font-weight: 650; letter-spacing: 0.01em; background: transparent; border-color: transparent; padding: 4px 8px; }
+.picker .current:hover, .picker .current[aria-expanded='true'] { background: var(--raised); border-color: var(--line); }
+.picker .caret { color: var(--dim); font-size: 10px; }
+.picker .star { color: var(--dim); padding: 4px 7px; line-height: 1; background: transparent; border-color: transparent; }
+.picker .star.on { color: var(--warn); }
+.picker .star.sm { border: 0; background: none; padding: 2px 6px; }
+.picker .favs { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.picker .chip { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
+.picker .chip.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.picker .pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: min(360px, calc(100vw - 32px));
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 10px; box-shadow: var(--shadow-lg); }
+.picker input { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.picker input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.picker .quotes { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 6px; }
+.picker .quotes button { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
+.picker .quotes button.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.picker ul { list-style: none; margin: 0; padding: 0; max-height: min(360px, 55vh); overflow-y: auto; }
+.picker li { display: flex; align-items: center; border-radius: 6px; }
+.picker li.active { background: var(--line); }
+.picker li.cur .name { color: var(--accent); }
+.picker .row { flex: 1; display: flex; align-items: center; border: 0; background: none; padding: 4px 6px 4px 0; text-align: left; }
+.picker .name { flex: 1; }
+.picker .venues { display: inline-flex; gap: 3px; }
+.picker .v { font-size: 10px; width: 16px; text-align: center; border-radius: 3px; color: var(--dim); opacity: 0.35; }
+.picker .v.has { opacity: 1; border: 1px solid var(--line); }
+.picker .v.has.here { color: var(--bid); border-color: var(--bid); }
+.picker .v.alt { border-style: dashed; }
+.picker .foot { margin: 6px 2px 0; font-size: 11px; color: var(--dim); }

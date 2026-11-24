@@ -8,6 +8,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    "jsx": "react-jsx",
     "verbatimModuleSyntax": false,
     "types": ["node", "vite/client"]
   },

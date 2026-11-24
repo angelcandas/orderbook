@@ -55,7 +55,7 @@ Coinglass (liquidation context), Coinbase Advanced (depth chart readouts).
 
 ## The 30 changes
 
-Page shell (Svelte, main thread):
+Page shell (main thread; Svelte when this was written, React since 24 Nov 2026):
 
 1. **Design tokens**: layered surfaces (bg, panel, raised, hover), three text
    weights, radii and a spacing scale, with dark and light palettes matched in
