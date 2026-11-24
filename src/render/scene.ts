@@ -7,6 +7,8 @@ import { computeLayout, DEFAULT_LAYOUT, type LayoutPrefs, type Rect } from './la
 export interface SceneSettings {
   depthRangePct: number; // half-width of the depth chart around the mid, percent
   candlesVisible: number;
+  /** vertical zoom of the candle chart: 1 = fit the visible candles, >1 = zoomed in */
+  candlesPriceScale?: number;
   /** extra px between ladder rows on top of the text height: the ladder's zoom */
   ladderRowPad?: number;
   reducedMotion: boolean;
@@ -23,6 +25,8 @@ export const PANE_LADDER = 1, PANE_DEPTH = 2, PANE_CANDLES = 4, PANE_ALL = 7;
 const HEADER = 22;
 /** px kept free at the right of each pane header for the zoom buttons drawn over it */
 export const HEADER_CTRL_W = 92;
+/** candle chart price axis width and time strip height, css px (the page puts drag handles on them) */
+export const CANDLE_AXIS_W = 70, CANDLE_TIME_H = 24, PANE_HEADER = HEADER;
 
 /**
  * Draws the whole market view into one WebGL2 canvas: ladder (left), depth
@@ -44,6 +48,8 @@ export class Scene {
   candles: Rect = { x: 0, y: 0, w: 0, h: 0 };
   /** half-width of the depth chart actually drawn, percent (for zooming from auto) */
   depthPct = 1;
+  /** candle price plot and axis width, for the axis drag handles */
+  candlePlot: Rect = { x: 0, y: 0, w: 0, h: 0 };
   /** hit boxes of pattern labels, for clicks */
   patternBoxes: { id: string; x: number; y: number; w: number; h: number }[] = [];
 
@@ -77,10 +83,10 @@ export class Scene {
     }
     if (dirty & PANE_CANDLES) {
       g.begin();
-      this.drawCandles(a, v, ptr, s, t);
+      const cleared = this.drawCandles(a, v, ptr, s, t);
       g.rect(this.candles.x, this.candles.y, 1, this.candles.h, t.grid);
       g.rect(this.candles.x, this.candles.y, this.candles.w, 1, t.grid);
-      g.end(t.bg, this.candles);
+      g.end(t.bg, this.candles, !cleared);
     }
     return anim;
   }
@@ -324,19 +330,25 @@ export class Scene {
   }
 
   // ---------------- candles + patterns ----------------
-  private drawCandles(a: AnalyticsOut | null, v: Float64Array, ptr: { x: number; y: number; in: boolean }, s: SceneSettings, t: Theme): void {
+  /**
+   * Drawn in three passes so a vertical zoom can't spill price content over
+   * the header, axis or volume: frame (clears the pane), price content
+   * (scissored to the plot, no clear), crosshair (no clear). Returns true once
+   * the pane has been cleared, so the caller's final flush must not clear it.
+   */
+  private drawCandles(a: AnalyticsOut | null, v: Float64Array, ptr: { x: number; y: number; in: boolean }, s: SceneSettings, t: Theme): boolean {
     const g = this.g;
     const r = this.candles;
     this.header(r, 'CANDLES  EMA20  EMA50  PATTERNS', t);
     this.patternBoxes.length = 0;
     if (!a || a.c.length === 0) {
       g.text(r.x + 12, r.y + HEADER + 12, 'waiting for candles...', t.dim);
-      return;
+      return false;
     }
     const N = a.c.length;
     const vis = Math.max(20, Math.min(N, s.candlesVisible));
     const first = N - vis;
-    const axisW = 70;
+    const axisW = CANDLE_AXIS_W;
     const px = r.x + 8, pw = r.w - 16 - axisW;
     const volH = Math.round((r.h - HEADER) * 0.14);
     const py = r.y + HEADER + 10, ph = r.h - HEADER - 10 - 24 - volH;
@@ -348,6 +360,13 @@ export class Scene {
     }
     const pad = (hi - lo) * 0.08 || hi * 0.001;
     lo -= pad; hi += pad;
+    const ys = s.candlesPriceScale ?? 1;
+    if (ys !== 1 && ys > 0) {
+      // scale about the middle of the fitted range
+      const c = (lo + hi) / 2, half = (hi - lo) / 2 / ys;
+      lo = c - half; hi = c + half;
+    }
+    this.candlePlot.x = r.x + 1; this.candlePlot.y = py; this.candlePlot.w = r.w - axisW - 1; this.candlePlot.h = ph;
     const step = pw / vis;
     const bw = Math.max(1, Math.floor(step * 0.7));
     const X = (i: number) => px + (i - first + 0.5) * step;
@@ -362,15 +381,31 @@ export class Scene {
     }
     const volBase = r.y + r.h - 24;
     for (let i = first; i < N; i++) {
-      const up = a.c[i] >= a.o[i];
-      const col = up ? t.bid : t.ask;
+      const col = a.c[i] >= a.o[i] ? t.bid : t.ask;
+      const vh = vmax > 0 ? (a.v[i] / vmax) * volH : 0;
+      g.rect(X(i) - bw / 2, volBase - vh, bw, vh, withAlpha(col, 0.35));
+    }
+    // live price tag on the axis (the dashed line is drawn with the price content)
+    const bb = v[H.bestBid], ba = v[H.bestAsk];
+    const m = (bb + ba) / 2;
+    const showMid = bb === bb && ba === ba && m > lo && m < hi;
+    if (showMid) {
+      g.rect(r.x + r.w - axisW + 2, Y(m) - g.atlas.cellH / 2 - 1, axisW - 4, g.atlas.cellH + 2, t.accent);
+      g.number(r.x + r.w - 8, Y(m) - g.atlas.cellH / 2, m, pd, t.bg, false);
+    }
+    g.rect(r.x, r.y, 1, r.h, t.grid);
+    g.rect(r.x, r.y, r.w, 1, t.grid);
+    g.end(t.bg, r);
+
+    // ---- price content, clipped to the plot ----
+    g.begin();
+    for (let i = first; i < N; i++) {
+      const col = a.c[i] >= a.o[i] ? t.bid : t.ask;
       const x = X(i);
       g.rect(x - 0.5, Y(a.h[i]), 1, Math.max(1, Y(a.l[i]) - Y(a.h[i])), col);
       const y0 = Y(Math.max(a.o[i], a.c[i]));
       const y1 = Y(Math.min(a.o[i], a.c[i]));
       g.rect(x - bw / 2, y0, bw, Math.max(1, y1 - y0), col);
-      const vh = vmax > 0 ? (a.v[i] / vmax) * volH : 0;
-      g.rect(x - bw / 2, volBase - vh, bw, vh, withAlpha(col, 0.35));
     }
     // EMAs
     for (const [arr, col] of [[a.ema20, t.ema20], [a.ema50, t.ema50]] as const) {
@@ -379,15 +414,7 @@ export class Scene {
       }
     }
     // live price line from the book
-    const bb = v[H.bestBid], ba = v[H.bestAsk];
-    if (bb === bb && ba === ba) {
-      const m = (bb + ba) / 2;
-      if (m > lo && m < hi) {
-        g.dashed(px, Y(m), px + pw, Y(m), 1, 3, withAlpha(t.accent, 0.7));
-        g.rect(r.x + r.w - axisW + 2, Y(m) - g.atlas.cellH / 2 - 1, axisW - 4, g.atlas.cellH + 2, t.accent);
-        g.number(r.x + r.w - 8, Y(m) - g.atlas.cellH / 2, m, pd, t.bg, false);
-      }
-    }
+    if (showMid) g.dashed(px, Y(m), px + pw, Y(m), 1, 3, withAlpha(t.accent, 0.7));
 
     // patterns
     let labelRow = 0;
@@ -444,7 +471,10 @@ export class Scene {
       this.patternBoxes.push({ id: p.id, x: lx, y: ly, w: lw, h: g.atlas.cellH + 2 });
     }
 
-    // crosshair + OHLC readout
+    g.end(t.bg, this.candlePlot, false);
+
+    // ---- crosshair + OHLC readout, over everything ----
+    g.begin();
     if (ptr.in && ptr.x >= px && ptr.x <= px + pw && ptr.y >= py && ptr.y <= volBase) {
       const i = Math.min(N - 1, Math.max(first, first + Math.floor((ptr.x - px) / step)));
       g.rect(X(i), py, 1, volBase - py, withAlpha(t.text, 0.3));
@@ -462,6 +492,7 @@ export class Scene {
         x += 15 * cw;
       }
     }
+    return true;
   }
 }
 

@@ -90,6 +90,7 @@ function zoom(pane: ZoomPane, dir: 1 | -1 | 0): void {
   if (pane === 'candles') {
     const c = ZOOM.candles;
     settings.candlesVisible = dir === 0 ? c.def : Math.max(c.min, Math.min(c.max, Math.round(settings.candlesVisible * (dir < 0 ? 1.15 : 0.87))));
+    if (dir === 0) settings.candlesPriceScale = ZOOM.priceScale.def; // fit resets both axes
     dirty |= PANE_CANDLES;
   } else if (pane === 'depth') {
     const d = ZOOM.depthPct;
@@ -102,8 +103,27 @@ function zoom(pane: ZoomPane, dir: 1 | -1 | 0): void {
     settings.ladderRowPad = dir === 0 ? r.def : Math.max(r.min, Math.min(r.max, cur + dir * 2));
     dirty |= PANE_LADDER;
   }
-  const z: ZoomState = { type: 'zoom', candlesVisible: settings.candlesVisible, depthRangePct: settings.depthRangePct, ladderRowPad: settings.ladderRowPad ?? ZOOM.rowPad.def };
+  reportZoom();
+}
+
+function reportZoom(): void {
+  const z: ZoomState = { type: 'zoom', candlesVisible: settings.candlesVisible, depthRangePct: settings.depthRangePct, ladderRowPad: settings.ladderRowPad ?? ZOOM.rowPad.def, candlesPriceScale: settings.candlesPriceScale ?? 1 };
   postMessage(z);
+}
+
+/** Zoom one axis of the candle chart by `factor` (>1 = in); 0 resets that axis. */
+function candleScale(axis: 'x' | 'y', factor: number): void {
+  if (axis === 'y') {
+    const p = ZOOM.priceScale;
+    settings.candlesPriceScale = factor === 0 ? p.def : Math.max(p.min, Math.min(p.max, (settings.candlesPriceScale ?? 1) * factor));
+    dirty |= PANE_CANDLES;
+    reportZoom();
+    return;
+  }
+  const c = ZOOM.candles;
+  settings.candlesVisible = factor === 0 ? c.def : Math.max(c.min, Math.min(c.max, Math.round(settings.candlesVisible / factor)));
+  dirty |= PANE_CANDLES;
+  reportZoom();
 }
 
 function stats(): void {
@@ -186,13 +206,17 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
     case 'wheel': {
       const pane = scene.paneAt(m.x, m.y);
       const dir = m.dy > 0 ? -1 : 1; // wheel down zooms out
-      if (pane === PANE_CANDLES) zoom('candles', dir);
+      if (pane === PANE_CANDLES && m.shift) candleScale('y', dir > 0 ? 1.15 : 1 / 1.15);
+      else if (pane === PANE_CANDLES) zoom('candles', dir);
       else if (pane === PANE_DEPTH) zoom('depth', dir);
       else if (pane === PANE_LADDER) zoom('ladder', dir);
       break;
     }
     case 'zoom':
       zoom(m.pane, m.dir);
+      break;
+    case 'candleScale':
+      candleScale(m.axis, m.factor);
       break;
     case 'layout':
       layoutPrefs = normalizeLayout(m.layout);

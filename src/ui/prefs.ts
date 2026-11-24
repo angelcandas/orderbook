@@ -8,6 +8,7 @@ export interface ViewPrefs {
   candlesVisible: number;
   depthRangePct: number; // 0 = auto-fit
   ladderRowPad: number;
+  candlesPriceScale: number; // 1 = fit
 }
 
 const KEY = 'depthline.view.v1';
@@ -28,6 +29,7 @@ export function normalizePrefs(p: any): ViewPrefs {
     candlesVisible: Math.round(num(p?.candlesVisible, ZOOM.candles.min, ZOOM.candles.max, ZOOM.candles.def)),
     depthRangePct: p?.depthRangePct === 0 ? 0 : num(p?.depthRangePct, ZOOM.depthPct.min, ZOOM.depthPct.max, 0),
     ladderRowPad: Math.round(num(p?.ladderRowPad, ZOOM.rowPad.min, ZOOM.rowPad.max, ZOOM.rowPad.def)),
+    candlesPriceScale: num(p?.candlesPriceScale, ZOOM.priceScale.min, ZOOM.priceScale.max, ZOOM.priceScale.def),
   };
 }
 
