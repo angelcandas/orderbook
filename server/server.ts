@@ -205,6 +205,84 @@ function binanceRest(url: URL, res: http.ServerResponse) {
   send(404, { msg: 'not found' });
 }
 
+// ---------- Binance USD-M futures (liquidation levels) ----------
+// Same synthetic market as the spot sim, plus a made-up open interest that
+// drifts up and down over hours, so the liquidation map has something to show.
+function syntheticOi(sim: MarketSim, t: number): number {
+  const base = 50_000_000 / (sim.midTick * sim.inst.tickSize);
+  const h = t / 3_600_000;
+  return base * (1 + 0.18 * Math.sin(h / 2.3) + 0.07 * Math.sin(h * 1.7 + 1) + 0.03 * Math.sin(h * 6.1));
+}
+const PERIOD_MS: Record<string, number> = { '5m': 300_000, '15m': 900_000, '30m': 1_800_000, '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '1d': 86_400_000 };
+const fclients = new Set<BClient>();
+
+function futuresRest(url: URL, res: http.ServerResponse) {
+  const send = (code: number, body: unknown) => {
+    res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cross-origin-resource-policy': 'cross-origin' });
+    res.end(JSON.stringify(body));
+  };
+  const path = url.pathname.replace(/^\/futures/, '');
+  const sym = url.searchParams.get('symbol') ?? '';
+  const sim = bsims.get(sym);
+  if (!sim) return send(400, { code: -1121, msg: 'Invalid symbol.' });
+  if (path === '/fapi/v1/klines') {
+    const iv = url.searchParams.get('interval') ?? '1m';
+    const minutes = iv.endsWith('h') ? parseInt(iv) * 60 : parseInt(iv);
+    const s = getSeries(sim, minutes);
+    const limit = Math.min(1500, Number(url.searchParams.get('limit') ?? 500));
+    return send(200, s.slice(-limit).map((c) => [c.t, String(c.o), String(c.h), String(c.l), String(c.c), String(c.v * 40), c.t + minutes * 60_000 - 1]));
+  }
+  if (path === '/futures/data/openInterestHist') {
+    const step = PERIOD_MS[url.searchParams.get('period') ?? '5m'] ?? 300_000;
+    const limit = Math.min(500, Number(url.searchParams.get('limit') ?? 30));
+    const end = Math.floor(Date.now() / step) * step;
+    const out = [];
+    for (let i = limit - 1; i >= 0; i--) {
+      const t = end - i * step;
+      const oi = syntheticOi(sim, t);
+      out.push({ symbol: sym, sumOpenInterest: oi.toFixed(3), sumOpenInterestValue: (oi * sim.midTick * sim.inst.tickSize).toFixed(2), timestamp: t });
+    }
+    return send(200, out);
+  }
+  if (path === '/fapi/v1/openInterest') return send(200, { symbol: sym, openInterest: syntheticOi(sim, Date.now()).toFixed(3), time: Date.now() });
+  send(404, { msg: 'not found' });
+}
+
+function onFutures(ws: WebSocket, url: URL) {
+  // only routed market streams carry aggTrade / forceOrder, like production
+  if (!url.pathname.startsWith('/futures/market')) return ws.close();
+  const cl: BClient = { ws, streams: new Set((url.searchParams.get('streams') ?? '').split('/').filter(Boolean)) };
+  fclients.add(cl);
+  ws.on('close', () => fclients.delete(cl));
+}
+
+let lastFutures = 0;
+let aggId = 1;
+function futuresTick(wall: number) {
+  for (const cl of fclients) {
+    for (const st of cl.streams) {
+      const m = /^(\w+)@(aggTrade|forceOrder)$/.exec(st);
+      if (!m) continue;
+      const sym = m[1].toUpperCase();
+      const sim = bsims.get(sym);
+      if (!sim) continue;
+      const px = sim.midTick * sim.inst.tickSize;
+      if (m[2] === 'aggTrade') {
+        for (let i = 0; i < 5; i++) {
+          const p = (px * (1 + (Math.random() - 0.5) * 0.0004)).toFixed(sim.inst.priceDecimals);
+          const q = (Math.random() ** 2 * 2 * (91000 / px)).toFixed(3);
+          cl.ws.send(JSON.stringify({ stream: st, data: { e: 'aggTrade', E: wall, s: sym, a: aggId++, p, q, T: wall, m: Math.random() < 0.5 } }));
+        }
+      } else if (Math.random() < 0.02) {
+        const S = Math.random() < 0.5 ? 'SELL' : 'BUY';
+        const q = (Math.random() ** 3 * 5 * (91000 / px)).toFixed(3);
+        const p = px.toFixed(sim.inst.priceDecimals);
+        cl.ws.send(JSON.stringify({ stream: st, data: { e: 'forceOrder', E: wall, o: { s: sym, S, o: 'LIMIT', f: 'IOC', q, p, ap: p, X: 'FILLED', l: q, z: q, T: wall } } }));
+      }
+    }
+  }
+}
+
 // ---------- tick loop ----------
 let carry = 0;
 let last = performance.now();
@@ -273,6 +351,9 @@ function tick() {
     }
   }
 
+  // futures trades, 20 times a second
+  if (fclients.size && now - lastFutures > 50) { lastFutures = now; futuresTick(wall); }
+
   // candles, 4 times a second
   if (now - lastCandle > 250) {
     lastCandle = now;
@@ -306,6 +387,7 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({ rate: RATE, pairs: pairs.length }));
   }
   if (url.pathname.startsWith('/binance/')) return binanceRest(url, res);
+  if (url.pathname.startsWith('/futures/')) return futuresRest(url, res);
   if (url.pathname === '/kraken/0/public/OHLC') return krakenRest(url, res);
   res.writeHead(404); res.end();
 });
@@ -315,6 +397,7 @@ server.on('upgrade', (req, sock, head) => {
   wss.handleUpgrade(req, sock, head, (ws) => {
     if (url.pathname.startsWith('/kraken')) onKraken(ws);
     else if (url.pathname.startsWith('/binance')) onBinance(ws, url);
+    else if (url.pathname.startsWith('/futures')) onFutures(ws, url);
     else ws.close();
   });
 });

@@ -169,6 +169,13 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
           if (old) p.postMessage({ type: 'return', data: old }, [old.buffer]);
         };
       }
+      if (m.liqPort) m.liqPort.onmessage = (ev) => {
+        const d = ev.data;
+        if (d.type === 'liq') scene.liq.frame(d);
+        else if (d.type === 'liqTail') scene.liq.tail(d);
+        else if (d.type === 'liqClear') scene.liq.clear();
+        dirty |= PANE_CANDLES;
+      };
       m.analyticsPort.onmessage = (ev) => {
         analytics = ev.data as AnalyticsOut;
         dirty |= PANE_CANDLES;

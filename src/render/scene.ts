@@ -2,6 +2,7 @@ import { Gfx, withAlpha, type RGBA } from './gl';
 import type { Theme } from './theme';
 import { H, LAD_BID, LAD_ASK, DEP_BID, DEP_ASK, LADDER, STATUS_NAMES } from '../shared/view';
 import type { AnalyticsOut, PatternHit } from '../patterns/types';
+import { LiqView } from './liq';
 import { computeLayout, DEFAULT_LAYOUT, type LayoutPrefs, type Rect } from './layout';
 
 export interface SceneSettings {
@@ -15,6 +16,8 @@ export interface SceneSettings {
   showChartPatterns: boolean;
   showCandlePatterns: boolean;
   selectedPattern: string | null;
+  /** liquidation level bands behind the candles (default on) */
+  showLiquidations?: boolean;
   venueLabel: string;
   pairLabel: string;
 }
@@ -52,6 +55,8 @@ export class Scene {
   candlePlot: Rect = { x: 0, y: 0, w: 0, h: 0 };
   /** hit boxes of pattern labels, for clicks */
   patternBoxes: { id: string; x: number; y: number; w: number; h: number }[] = [];
+  /** liquidation levels, fed by the render worker */
+  readonly liq = new LiqView();
 
   constructor(private g: Gfx) {}
 
@@ -379,6 +384,7 @@ export class Scene {
       g.rect(px, y, pw, 1, t.grid);
       g.number(r.x + r.w - 8, y - g.atlas.cellH / 2, p, pd, t.dim, false);
     }
+    if (s.showLiquidations !== false) this.liq.draw(g, a, first, N, step, X, Y, lo, hi, py, ph, px + pw - 4, t);
     const volBase = r.y + r.h - 24;
     for (let i = first; i < N; i++) {
       const col = a.c[i] >= a.o[i] ? t.bid : t.ask;

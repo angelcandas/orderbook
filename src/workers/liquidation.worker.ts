@@ -1,227 +1,192 @@
 /**
- * Liquidation heatmap worker: owns its own futures socket, the liquidation
- * model and the canvas, so none of this touches the order book path.
+ * Liquidation levels worker. Owns its own futures socket and model, so none of
+ * this touches the order book path; it hands per-candle level columns to the
+ * render worker, which draws them as bands on the candle chart.
  *
- * Live: Binance USD-M futures public streams (aggTrade + forceOrder for one
- * symbol) and the public open-interest REST endpoint, polled every 5 s.
- * Kraken spot has no liquidations; the panel always shows Binance futures.
- * Synthetic: a random-walk market for the local emulator source and tests.
+ * Data, all public Binance USD-M futures:
+ *  - history: /fapi/v1/klines + /futures/data/openInterestHist (REST)
+ *  - live: <sym>@aggTrade and <sym>@forceOrder on wss://fstream.binance.com/market
+ *    (the unrouted /stream URL stopped carrying these streams in 2026)
+ *  - open interest: /fapi/v1/openInterest every 10 s
+ * If futures REST is unreachable from the browser, history falls back to spot
+ * klines and a volume-based estimate, and the stats say so.
+ * Kraken spot has no liquidations; the overlay always uses the Binance perpetual
+ * and the chart rescales its prices onto the venue's own.
  */
-import { LiqMap, futuresSymbol, type LiqEvent } from '../liquidation/model';
-import { Heatmap, HEAT_DARK, HEAT_LIGHT, compact } from '../liquidation/heatmap';
-import { Histogram } from '../shared/hist';
-import { rng } from '../liquidation/model';
+import { futuresSymbol } from '../liquidation/model';
+import { LiqSeries, periods, type Bar, type OiPoint } from '../liquidation/series';
 
 export type LiqCmd =
-  | { type: 'init'; canvas: OffscreenCanvas; w: number; h: number; dpr: number; theme: 'dark' | 'light'; spot: string; mode: 'live' | 'synthetic'; ws?: string; rest?: string; columnMs?: number }
-  | { type: 'resize'; w: number; h: number; dpr: number }
-  | { type: 'symbol'; spot: string }
-  | { type: 'theme'; theme: 'dark' | 'light' }
-  | { type: 'pointer'; x: number; y: number; in: boolean }
+  | { type: 'init'; futuresWs: string; futuresRest: string; spotRest: string; renderPort: MessagePort }
+  | { type: 'focus'; base: string | null; interval: number }
   | { type: 'stop' };
 
 export interface LiqStats {
-  type: 'stats';
+  type: 'liqStats';
   symbol: string;
   status: string;
+  /** where the levels come from */
+  source: 'open interest' | 'volume estimate' | '';
   msgsPerSec: number;
-  liquidations: number; // events in view
+  liquidations: number;
   liquidatedNotional: number;
-  oi: boolean; // open interest available (else volume fallback)
-  draw: { p50: number; p99: number };
-  long?: { price: number; notional: string };
-  short?: { price: number; notional: string };
-  last: LiqEvent | null;
-  /** futures contract size vs spot (1000 for 1000PEPEUSDT) */
-  mult: number;
+  long?: { price: number; notional: number };
+  short?: { price: number; notional: number };
+  lastPrice: number;
+  backfillMs: number;
+  bars: number;
 }
 
-const OI_MS = 5000;
+const OI_MS = 10_000;
 
-let ctx: OffscreenCanvasRenderingContext2D;
-let map: LiqMap;
-let heat: Heatmap;
-let mode: 'live' | 'synthetic' = 'live';
-let wsBase = 'wss://fstream.binance.com';
-let restBase = 'https://fapi.binance.com';
-let columnMs = 1000;
+let wsBase = '', restBase = '', spotRest = '';
+let port: MessagePort | null = null;
+let series: LiqSeries | null = null;
 let symbol = '';
-let mult = 1;
-let status = 'connecting';
+let status = 'idle';
+let source: LiqStats['source'] = '';
 let ws: WebSocket | null = null;
 let timers: any[] = [];
+let gen = 0;
 let msgs = 0, msgsPerSec = 0;
-let oiOk = true;
-let gen = 0; // bumps on symbol change so stale callbacks drop out
-let dirty = false;
-let lastEvent: LiqEvent | null = null;
-let size = { w: 1, h: 1, dpr: 1 };
-const drawH = new Histogram();
+let oiLive = true;
+let backfillMs = 0;
+let tailDirty = false;
 
 self.onmessage = (e: MessageEvent<LiqCmd>) => {
   const m = e.data;
-  switch (m.type) {
-    case 'init': {
-      ctx = m.canvas.getContext('2d', { alpha: false }) as OffscreenCanvasRenderingContext2D;
-      mode = m.mode;
-      if (m.ws) wsBase = m.ws;
-      if (m.rest) restBase = m.rest;
-      if (m.columnMs) columnMs = m.columnMs;
-      setup(m.spot);
-      heat.theme = m.theme === 'light' ? HEAT_LIGHT : HEAT_DARK;
-      size = { w: m.w, h: m.h, dpr: m.dpr };
-      heat.resize(m.w, m.h, m.dpr);
-      startLoop();
-      break;
-    }
-    case 'resize': size = { w: m.w, h: m.h, dpr: m.dpr }; heat?.resize(m.w, m.h, m.dpr); dirty = true; break;
-    case 'symbol': if (futuresSymbol(m.spot).symbol !== symbol) setup(m.spot); break;
-    case 'theme': if (heat) { heat.theme = m.theme === 'light' ? HEAT_LIGHT : HEAT_DARK; dirty = true; } break;
-    case 'pointer': if (heat) { heat.hover = m.in ? { x: m.x, y: m.y } : null; dirty = true; } break;
-    case 'stop': teardown(); close(); break;
-  }
+  if (m.type === 'init') {
+    wsBase = m.futuresWs; restBase = m.futuresRest; spotRest = m.spotRest; port = m.renderPort;
+    setInterval(() => { msgsPerSec = msgs; msgs = 0; postStats(); }, 1000);
+  } else if (m.type === 'focus') focus(m.base, m.interval);
+  else if (m.type === 'stop') { teardown(); close(); }
 };
 
-function setup(spot: string): void {
-  teardown();
-  gen++;
-  ({ symbol, mult } = futuresSymbol(spot));
-  map = new LiqMap();
-  const prevTheme = heat?.theme;
-  heat = new Heatmap(ctx, map);
-  if (prevTheme) heat.theme = prevTheme;
-  heat.resize(size.w, size.h, size.dpr);
-  lastEvent = null;
-  oiOk = true;
-  status = 'connecting';
-  if (mode === 'live') connect(gen); else synthetic(gen);
-  timers.push(setInterval(() => column(), columnMs));
-  timers.push(setInterval(() => { msgsPerSec = msgs; msgs = 0; post(); }, 1000));
-  dirty = true;
-}
-
 function teardown(): void {
-  for (const t of timers) clearInterval(t);
+  for (const t of timers) { clearInterval(t); clearTimeout(t); }
   timers = [];
-  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  if (ws) { ws.onclose = null; ws.onmessage = null; ws.close(); ws = null; }
 }
 
-function column(): void {
-  if (!map.ready) return;
-  if (map.shifted) { heat.shift(map.shifted); map.shifted = 0; }
-  heat.push(Date.now());
-  dirty = true;
+async function focus(base: string | null, interval: number): Promise<void> {
+  teardown();
+  const g = ++gen;
+  series = null;
+  port?.postMessage({ type: 'liqClear' });
+  if (!base) { symbol = ''; status = 'no pair'; return; }
+  symbol = futuresSymbol(`${base}USDT`).symbol;
+  status = 'loading history';
+  const s = new LiqSeries(interval * 60_000);
+  const t0 = performance.now();
+  try {
+    const { bars, oi, src } = await history(symbol, interval);
+    if (g !== gen) return;
+    s.replay(bars, oi);
+    source = src;
+    backfillMs = performance.now() - t0;
+  } catch (err) {
+    if (g !== gen) return;
+    if (String(err).includes('400')) { status = `no ${symbol} perpetual`; return; }
+    source = 'volume estimate';
+  }
+  series = s;
+  if (s.cols.length) port?.postMessage(s.frame(symbol));
+  connect(g);
+  oiLive = source === 'open interest';
+  timers.push(setInterval(() => pollOi(g), OI_MS));
+  // the newest column follows live trades, at most once a second
+  timers.push(setInterval(() => {
+    if (g !== gen || !series || !tailDirty || !series.cols.length) return;
+    tailDirty = false;
+    const t = series.tail();
+    port?.postMessage(t, [t.data.buffer, t.events.buffer]);
+  }, 1000));
 }
 
-function onLiquidation(ev: LiqEvent): void {
-  heat.events.push(ev);
-  lastEvent = ev;
-  dirty = true;
+async function getJson(url: string): Promise<any> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json();
 }
 
-// ---- live ----
+async function history(sym: string, interval: number): Promise<{ bars: Bar[]; oi: OiPoint[]; src: LiqStats['source'] }> {
+  const p = periods(interval);
+  // 500 OI points is the endpoint's max; pick as many bars as it can cover
+  const limit = interval < 5 ? 1000 : 500;
+  const toBars = (rows: any[]): Bar[] => rows.map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
+  try {
+    const [k, o] = await Promise.all([
+      getJson(`${restBase}/fapi/v1/klines?symbol=${sym}&interval=${p.kline}&limit=${limit}`),
+      getJson(`${restBase}/futures/data/openInterestHist?symbol=${sym}&period=${p.oi}&limit=500`),
+    ]);
+    const oi = (o as any[]).map((x) => ({ t: +x.timestamp, oi: +x.sumOpenInterest })).sort((a, b) => a.t - b.t);
+    return { bars: toBars(k), oi, src: 'open interest' };
+  } catch (err) {
+    if (String(err).includes('400')) throw err;
+    // futures REST blocked (CORS) or down: spot klines, volume-based estimate
+    const spot = sym.replace(/^1000/, '');
+    const k = await getJson(`${spotRest}/api/v3/klines?symbol=${spot}&interval=${p.kline}&limit=${limit}`);
+    return { bars: toBars(k), oi: [], src: 'volume estimate' };
+  }
+}
 
 function connect(g: number, attempt = 0): void {
   const s = symbol.toLowerCase();
-  const sock = new WebSocket(`${wsBase}/stream?streams=${s}@aggTrade/${s}@forceOrder`);
+  const sock = new WebSocket(`${wsBase}/market/stream?streams=${s}@aggTrade/${s}@forceOrder`);
   ws = sock;
-  sock.onopen = () => { if (g === gen) { status = 'live'; attempt = 0; } };
+  let got = false;
+  status = 'connecting';
+  sock.onopen = () => { if (g === gen) status = 'waiting for trades'; };
   sock.onmessage = (e) => {
-    if (g !== gen) return;
+    if (g !== gen || !series) return;
     msgs++;
     let d: any;
     try { d = JSON.parse(e.data as string).data; } catch { return; }
     if (!d) return;
-    if (d.e === 'aggTrade') map.trade(+d.p, +d.q);
-    else if (d.e === 'forceOrder') {
+    if (!got) { got = true; attempt = 0; status = 'live'; }
+    if (d.e === 'aggTrade') {
+      const r = series.trade(+d.T, +d.p, +d.q);
+      tailDirty = true;
+      if (r === 'full') port?.postMessage(series.frame(symbol));
+      else if (r === 'new') { const t = series.tail(); port?.postMessage(t, [t.data.buffer, t.events.buffer]); }
+    } else if (d.e === 'forceOrder') {
       const o = d.o;
-      onLiquidation({ t: +o.T || Date.now(), price: +(o.ap || o.p), qty: +(o.z || o.q), side: o.S === 'SELL' ? 'long' : 'short' });
+      series.liquidation(+o.T || Date.now(), +(o.ap || o.p), +(o.z || o.q), o.S === 'SELL' ? 'long' : 'short');
+      tailDirty = true;
     }
   };
   sock.onclose = () => {
     if (g !== gen) return;
     status = 'reconnecting';
-    const t = setTimeout(() => connect(g, attempt + 1), Math.min(30_000, 500 * 2 ** attempt));
-    timers.push(t);
+    timers.push(setTimeout(() => connect(g, attempt + 1), Math.min(30_000, 1000 * 2 ** attempt)));
   };
-  sock.onerror = () => { if (g === gen) status = 'error: socket'; };
-  // connections are cut at 24 h; recycle earlier
+  sock.onerror = () => { if (g === gen) status = 'socket error'; };
+  // a socket that opens but carries nothing is the failure seen before: say so
+  timers.push(setTimeout(() => { if (g === gen && !got) status = 'no futures data'; }, 15_000));
   timers.push(setTimeout(() => sock.close(), 23 * 3600 * 1000));
-  pollOi(g);
-  timers.push(setInterval(() => pollOi(g), OI_MS));
 }
 
 async function pollOi(g: number): Promise<void> {
-  if (!oiOk) { map.openFromVolume(); return; }
+  if (!series) return;
+  if (!oiLive) { series.openFromVolume(); tailDirty = true; return; }
   try {
-    const r = await fetch(`${restBase}/fapi/v1/openInterest?symbol=${symbol}`);
-    if (r.status === 400) { if (g === gen) { status = `error: no ${symbol} perpetual`; post(); teardown(); } return; }
-    if (!r.ok) throw new Error(String(r.status));
-    const j = await r.json();
-    if (g === gen) map.openInterest(+j.openInterest);
+    const j = await getJson(`${restBase}/fapi/v1/openInterest?symbol=${symbol}`);
+    if (g === gen && series) { series.openInterest(+j.openInterest); tailDirty = true; }
   } catch {
-    // CORS or network: fall back to assuming a share of volume opens positions
-    if (g === gen) { oiOk = false; map.openFromVolume(); }
+    if (g === gen) { oiLive = false; source = 'volume estimate'; }
   }
 }
 
-// ---- synthetic ----
-
-function synthetic(g: number): void {
-  const rnd = rng(7 + symbol.length);
-  const base = { BTCUSDT: 91000, ETHUSDT: 3100, SOLUSDT: 140 }[symbol] ?? 100;
-  let p = base, oi = 50_000_000 / base, drift = 0;
-  status = 'live (synthetic)';
-  timers.push(setInterval(() => {
-    if (g !== gen) return;
-    // 50 trades per 20 ms = 2,500 trades/s, with slow trends so levels get swept
-    // trends of a few tenths of a percent a minute, pulled back towards the start
-    drift = drift * 0.998 + (rnd() - 0.5) * 0.0000004 - (p / base - 1) * 0.0000002;
-    for (let i = 0; i < 50; i++) {
-      p *= 1 + drift + (rnd() - 0.5) * 0.00001;
-      map.trade(p, rnd() * 0.5 * (91000 / base));
-      msgs++;
-    }
-    if (rnd() < 0.03) {
-      const side = drift < 0 ? 'long' : 'short';
-      onLiquidation({ t: Date.now(), price: p, qty: rnd() ** 3 * 20 * (91000 / base), side });
-    }
-  }, 20));
-  timers.push(setInterval(() => {
-    if (g !== gen) return;
-    oi *= 1 + (rnd() - 0.42) * 0.004; // tends to grow
-    map.openInterest(oi);
-  }, 1000));
-}
-
-// ---- draw + stats ----
-
-const raf: (f: () => void) => void = typeof requestAnimationFrame === 'function'
-  ? (f) => requestAnimationFrame(f)
-  : (f) => setTimeout(f, 16);
-
-function startLoop(): void {
-  const frame = () => {
-    if (dirty && heat) {
-      dirty = false;
-      drawH.record(heat.draw());
-    }
-    raf(frame);
-  };
-  raf(frame);
-}
-
-function post(): void {
-  const c = map.clusters();
-  let notional = 0;
-  for (const e of heat.events) notional += e.price * e.qty;
+function postStats(): void {
+  let notional = 0, n = 0;
+  const ev = series?.events ?? [];
+  for (let i = 0; i < ev.length; i += 4) { notional += ev[i + 2]; n++; }
+  const c = series?.map.clusters();
   const s: LiqStats = {
-    type: 'stats', symbol, status, msgsPerSec, liquidations: heat.events.length, liquidatedNotional: notional,
-    oi: oiOk && mode === 'live' ? map.oiSamples > 1 : mode === 'synthetic',
-    draw: { p50: drawH.percentile(50), p99: drawH.percentile(99) },
-    long: c.long && { price: c.long.price, notional: compact(c.long.notional) },
-    short: c.short && { price: c.short.price, notional: compact(c.short.notional) },
-    last: lastEvent, mult,
+    type: 'liqStats', symbol, status, source, msgsPerSec,
+    liquidations: n, liquidatedNotional: notional,
+    long: c?.long, short: c?.short,
+    lastPrice: series?.map.lastPrice ?? 0, backfillMs, bars: series?.cols.length ?? 0,
   };
   (self as any).postMessage(s);
 }

@@ -11,7 +11,6 @@
   import type { PatternHit } from '../patterns/types';
   import Alerts from './Alerts.svelte';
   import { midOf } from '../alerts/alerts';
-  import LiquidationHeatmap from './LiquidationHeatmap.svelte';
   import { HEADER_CTRL_W, CANDLE_AXIS_W, CANDLE_TIME_H, PANE_HEADER } from '../render/scene';
   import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs } from '../render/layout';
   import type { ZoomPane } from '../workers/protocol';
@@ -39,8 +38,6 @@
   let reducedMotion = $state(matchMedia('(prefers-reduced-motion: reduce)').matches);
   let showTable = $state(false);
   let showLiq = $state(q.get('liq') !== '0');
-  // futures are quoted in USDT whatever the spot quote: BTC/USD, BTC/EUR -> BTCUSDT
-  let liqSpot = $derived(`${splitLabel(pair)?.base ?? 'BTC'}USDT`);
   let selected = $state<string | null>(null);
 
   // layout + zoom, remembered in this browser ($state.raw: plain objects, so they can be posted to the worker)
@@ -64,7 +61,7 @@
 
   const settings = (): SceneSettings => ({
     depthRangePct: zoomState.depthRangePct, candlesVisible: zoomState.candlesVisible, ladderRowPad: zoomState.ladderRowPad, candlesPriceScale: zoomState.candlesPriceScale, reducedMotion,
-    showChartPatterns: showChart, showCandlePatterns: showCandle, selectedPattern: selected,
+    showChartPatterns: showChart, showCandlePatterns: showCandle, selectedPattern: selected, showLiquidations: showLiq,
     venueLabel: venue.toUpperCase(), pairLabel: res ? `${res.base}/${res.quote}` : pair,
   });
 
@@ -136,6 +133,8 @@
   };
 
   const fmt = (x: number | undefined, d = 1) => (x === undefined || !isFinite(x) ? '–' : x.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }));
+  const usd = (v: number) => (v >= 1e9 ? `$${(v / 1e9).toFixed(1)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(0)}k` : `$${v.toFixed(0)}`);
+  const px = (p: number) => p.toLocaleString(undefined, { maximumSignificantDigits: 6 });
   const int = (x: number | undefined) => (x === undefined ? '–' : Math.round(x).toLocaleString());
 
   let totals = $derived.by(() => {
@@ -446,6 +445,22 @@
       </section>
 
       <section>
+        <h2>Liquidation levels
+          <span class="pill" class:ok={stats?.liq?.status === 'live'} class:bad={/error|no /.test(stats?.liq?.status ?? '')}>{stats?.liq?.status ?? 'idle'}</span>
+          <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={() => { engine?.setSettings({ showLiquidations: showLiq }); syncUrl(); }} /> show</label>
+        </h2>
+        {#if stats?.liq}
+          <dl class="mono">
+            <dt>Largest long cluster</dt><dd>{stats.liq.long ? `${px(stats.liq.long.price)} · ${usd(stats.liq.long.notional)}` : '–'}</dd>
+            <dt>Largest short cluster</dt><dd>{stats.liq.short ? `${px(stats.liq.short.price)} · ${usd(stats.liq.short.notional)}` : '–'}</dd>
+            <dt>Liquidations seen</dt><dd>{int(stats.liq.liquidations)} · {usd(stats.liq.liquidatedNotional)}</dd>
+            <dt>Futures msgs / s</dt><dd>{int(stats.liq.msgsPerSec)}</dd>
+          </dl>
+        {/if}
+        <p class="dim small">Bands on the candles are estimated liquidation levels for the {stats?.liq?.symbol || '…'} Binance perpetual (Kraken spot has no liquidations), rescaled to this chart's price: green is light, yellow and red are heavy, and the hottest levels are labelled. Built from {stats?.liq?.source === 'volume estimate' ? 'trade volume (open interest was not reachable)' : 'open interest changes'} and an assumed 10–100× leverage mix over {int(stats?.liq?.bars)} bars{#if stats?.liq?.backfillMs}{' '}(history rebuilt in {fmt(stats.liq.backfillMs, 0)} ms){/if}. Squares are real liquidations: red longs, green shorts. Cluster prices are in USDT.</p>
+      </section>
+
+      <section>
         <h2>Candle signals
           <label class="tog"><input type="checkbox" bind:checked={showCandle} onchange={() => engine?.setSettings({ showCandlePatterns: showCandle })} /> show</label>
         </h2>
@@ -464,7 +479,6 @@
         <h2>Options</h2>
         <label class="tog"><input type="checkbox" bind:checked={reducedMotion} onchange={() => engine?.setSettings({ reducedMotion })} /> Reduce motion (no flashes)</label>
         <label class="tog"><input type="checkbox" bind:checked={showTable} /> Show text table</label>
-        <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={syncUrl} /> Liquidation heatmap</label>
         <label class="tog">Text size
           <select bind:value={fontPx} onchange={setFont}>
             {#each Array.from({ length: ZOOM.font.max - ZOOM.font.min + 1 }, (_, i) => ZOOM.font.min + i) as px}<option value={px}>{px}px</option>{/each}
@@ -475,12 +489,6 @@
       </section>
     </aside>
   </main>
-
-  {#if showLiq}
-    {#key source}
-      <LiquidationHeatmap spot={liqSpot} mode={source === 'local' ? 'synthetic' : 'live'} {theme} />
-    {/key}
-  {/if}
 
   <section class="table" class:sr-only={!showTable} aria-label="Order book table">
     <h2>{venue} {res ? `${res.base}/${res.quote}` : pair} order book ({table?.status ?? '…'})</h2>
