@@ -2,6 +2,7 @@ import { Book, type Instrument } from '../engine/book';
 import { Status } from '../shared/view';
 import { nowAbs } from '../shared/hist';
 import type { Candle } from '../patterns/candle';
+import { krakenMarkets } from '../shared/pairs';
 import { newCounters, type FeedSink, type SocketFactory, type SocketLike } from './types';
 
 /**
@@ -36,7 +37,15 @@ export class KrakenFeed {
     const ws = (this.ws = this.socket(this.url));
     for (const s of this.symbols) this.sink.onStatus(s, Status.Connecting);
     ws.onopen = () => {
-      this.send({ method: 'subscribe', params: { channel: 'instrument', snapshot: true } });
+      if (!this.insts.size) {
+        this.send({ method: 'subscribe', params: { channel: 'instrument', snapshot: true } });
+        return;
+      }
+      // reconnect: instruments are known, so resubscribe straight away
+      const ok = this.symbols.filter((s) => this.insts.has(s));
+      for (const s of ok) this.sink.onStatus(s, Status.Syncing);
+      this.subscribeBooks(ok);
+      this.subscribeOhlc();
     };
     ws.onmessage = (ev) => this.onMessage(ev.data as string);
     ws.onclose = () => {
@@ -52,6 +61,33 @@ export class KrakenFeed {
   stop(): void {
     this.closed = true;
     this.ws?.close();
+  }
+
+  /**
+   * Change the books kept live without reconnecting: unsubscribe the ones
+   * dropped, subscribe the new ones (instruments are already known from the
+   * instrument snapshot).
+   */
+  setSymbols(symbols: string[]): void {
+    const next = [...new Set(symbols)];
+    const gone = this.symbols.filter((s) => !next.includes(s));
+    const added = next.filter((s) => !this.symbols.includes(s));
+    this.symbols = next;
+    if (gone.length) {
+      this.send({ method: 'unsubscribe', params: { channel: 'book', symbol: gone, depth: this.depth } });
+      for (const s of gone) { this.books.delete(s); this.live.delete(s); }
+    }
+    if (!added.length || !this.insts.size) {
+      for (const s of added) this.sink.onStatus(s, Status.Connecting);
+      return; // before the instrument snapshot: it subscribes this.symbols
+    }
+    const ok = added.filter((s) => this.insts.has(s));
+    for (const s of added) if (!this.insts.has(s)) this.sink.onStatus(s, Status.Error, 'unknown symbol');
+    for (const s of ok) {
+      this.books.set(s, new Book(this.insts.get(s)!, this.depth));
+      this.sink.onStatus(s, Status.Syncing);
+    }
+    this.subscribeBooks(ok);
   }
 
   setOhlc(symbol: string | null, interval: number): void {
@@ -110,6 +146,7 @@ export class KrakenFeed {
 
   private onInstrument(msg: any): void {
     if (msg.type !== 'snapshot' || this.insts.size) return;
+    this.sink.onMarkets?.(krakenMarkets(msg.data.pairs));
     for (const p of msg.data.pairs ?? []) {
       const inc = Number(p.price_increment ?? p.tick_size ?? 10 ** -p.price_precision);
       this.insts.set(p.symbol, {

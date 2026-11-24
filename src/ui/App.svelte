@@ -1,7 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Engine, type Snapshot, type LadderRow } from './engine';
-  import { PAIRS, INTERVALS, LIVE, localEndpoints, type Interval, type Venue } from '../shared/config';
+  import { INTERVALS, LIVE, localEndpoints, type Interval, type Venue } from '../shared/config';
+  import {
+    allPairs, builtinCatalog, loadCachedCatalog, loadFavourites, MarketIndex, quoteRanking,
+    saveCachedCatalog, saveFavourites, splitLabel, toggleFavourite, type Catalog,
+  } from '../shared/pairs';
+  import PairPicker from './PairPicker.svelte';
   import type { SceneSettings } from '../render/scene';
   import type { PatternHit } from '../patterns/types';
   import { HEADER_CTRL_W } from '../render/scene';
@@ -13,7 +18,15 @@
   let source = $state<'live' | 'local'>(q.get('src') === 'local' ? 'local' : 'live');
   let host = q.get('host') ?? 'localhost:8787';
   let venue = $state<Venue>((q.get('venue') as Venue) ?? 'kraken');
-  let pair = $state(Math.max(0, PAIRS.findIndex((p) => p.label === (q.get('pair') ?? 'BTC/USD'))));
+  let pair = $state(splitLabel(q.get('pair') ?? '') ? q.get('pair')!.toUpperCase() : 'BTC/USD');
+  let favourites = $state(loadFavourites());
+  // what each venue lists: the built in pairs, then the cache, then the venues' own lists as they arrive
+  const initialCatalog = (): Catalog => ({ ...builtinCatalog(), ...(source === 'live' ? loadCachedCatalog() : {}) });
+  let catalog = $state.raw<Catalog>(initialCatalog());
+  let entries = $derived(allPairs(catalog));
+  let quotes = $derived(quoteRanking(catalog));
+  let index = $derived({ kraken: new MarketIndex(catalog.kraken), binance: new MarketIndex(catalog.binance) });
+  let res = $derived(index[venue].resolve(pair));
   let group = $state(Number(q.get('group') ?? 1));
   let interval = $state<Interval>((Number(q.get('interval')) as Interval) || 15);
   let load = $state(Number(q.get('pairs') ?? 1));
@@ -45,7 +58,7 @@
   const settings = (): SceneSettings => ({
     depthRangePct: zoomState.depthRangePct, candlesVisible: zoomState.candlesVisible, ladderRowPad: zoomState.ladderRowPad, reducedMotion,
     showChartPatterns: showChart, showCandlePatterns: showCandle, selectedPattern: selected,
-    venueLabel: venue.toUpperCase(), pairLabel: PAIRS[pair].label,
+    venueLabel: venue.toUpperCase(), pairLabel: res ? `${res.base}/${res.quote}` : pair,
   });
 
   function start() {
@@ -56,13 +69,20 @@
       endpoints: source === 'local' ? localEndpoints(host) : LIVE,
       pairCount: load,
       depth: { kraken: source === 'local' ? 1000 : 500, binance: 1000 },
-      venue, pair, group, interval, settings: settings(), theme, layout: layoutPrefs, fontPx,
+      venue, pair, catalog, group, interval, settings: settings(), theme, layout: layoutPrefs, fontPx,
     });
     engine.onZoom = (z) => {
       zoomState = { candlesVisible: z.candlesVisible, depthRangePct: z.depthRangePct, ladderRowPad: z.ladderRowPad };
       persist();
     };
     engine.onStats = (s) => (stats = s);
+    const src = source;
+    engine.onMarkets = (v, markets) => {
+      if (!markets.length) return;
+      catalog = { ...catalog, [v]: markets };
+      if (src === 'live') saveCachedCatalog(v, markets);
+      engine?.setCatalog(catalog);
+    };
     engine.onSelected = (id) => (selected = id);
     (window as any).__depthline = engine;
   }
@@ -74,7 +94,7 @@
   }
 
   function syncUrl() {
-    const p = new URLSearchParams({ src: source, venue, pair: PAIRS[pair].label, group: String(group), interval: String(interval), pairs: String(load), theme });
+    const p = new URLSearchParams({ src: source, venue, pair, group: String(group), interval: String(interval), pairs: String(load), theme });
     if (source === 'local') p.set('host', host);
     history.replaceState(null, '', `?${p}`);
   }
@@ -120,7 +140,19 @@
       books: sum((s) => s.books),
     };
   });
-  let focusStatus = $derived(stats?.feeds[venue]?.status[PAIRS[pair][venue]] ?? 'connecting');
+  let focusStatus = $derived(res ? stats?.feeds[venue]?.status[res.symbol] ?? 'connecting' : 'not listed');
+  const venueName = (v: Venue) => (v === 'kraken' ? 'Kraken' : 'Binance');
+
+  function pickPair(label: string) {
+    pair = label;
+    selected = null;
+    engine?.setPair(pair);
+    syncUrl();
+  }
+  function favourite(label: string) {
+    favourites = toggleFavourite(favourites, label);
+    saveFavourites(favourites);
+  }
   const order = { forming: 0, confirmed: 1, failed: 2 } as const;
   let chartPatterns = $derived((stats?.patterns.list ?? []).filter((p: PatternHit) => p.family === 'chart').slice().sort((a, b) => order[a.status] - order[b.status] || b.end - a.end));
   let candlePats = $derived((stats?.patterns.list ?? []).filter((p: PatternHit) => p.family !== 'chart').slice(-12).reverse());
@@ -218,21 +250,19 @@
   <header>
     <strong class="brand">Depthline</strong>
     <label>Source
-      <select bind:value={source} onchange={() => { syncUrl(); restart(); }}>
+      <select bind:value={source} onchange={() => { catalog = initialCatalog(); syncUrl(); restart(); }}>
         <option value="live">Live exchanges</option>
         <option value="local">Local emulator</option>
       </select>
     </label>
     <div class="seg" role="group" aria-label="Venue">
       {#each ['kraken', 'binance'] as v}
-        <button class:on={venue === v} onclick={() => { venue = v as Venue; engine?.setVenue(venue); selected = null; syncUrl(); }}>{v === 'kraken' ? 'Kraken' : 'Binance'}</button>
+        <button class:on={venue === v} class:unlisted={!index[v as Venue].resolve(pair)}
+          title={index[v as Venue].resolve(pair) ? '' : `${venueName(v as Venue)} doesn't list ${pair}`}
+          onclick={() => { venue = v as Venue; engine?.setVenue(venue); selected = null; syncUrl(); }}>{venueName(v as Venue)}</button>
       {/each}
     </div>
-    <label>Pair
-      <select bind:value={pair} onchange={() => { selected = null; if (pair >= load) restart(); else engine?.setPair(pair); syncUrl(); }}>
-        {#each PAIRS as p, i}<option value={i}>{p.label}</option>{/each}
-      </select>
-    </label>
+    <PairPicker {pair} {entries} {quotes} {favourites} {venue} resolve={(v, l) => index[v].resolve(l)} onpick={pickPair} onfavourite={favourite} />
     <label>Group
       <select bind:value={group} onchange={() => { engine?.setGroup(group); syncUrl(); }}>
         {#each groups as g}<option value={g}>{g === 1 ? 'tick' : `${g} ticks`}</option>{/each}
@@ -295,7 +325,9 @@
       onpointerdown={dragSide} onkeydown={sideKey} ondblclick={() => { sideW = SIDE_W.def; persist(); }}></div>
     <aside style="--side-w:{sideW}px">
       <section>
-        <h2>Feed integrity <span class="pill" class:ok={focusStatus.startsWith('live')} class:bad={focusStatus.startsWith('error')}>{focusStatus}</span></h2>
+        <h2>Feed integrity <span class="pill" class:ok={focusStatus.startsWith('live')} class:bad={focusStatus.startsWith('error') || focusStatus === 'not listed'}>{focusStatus}</span></h2>
+        {#if !res}<p class="dim small">{venueName(venue)} doesn't list {pair}.{#if index[venue === 'kraken' ? 'binance' : 'kraken'].resolve(pair)}{' '}{venueName(venue === 'kraken' ? 'binance' : 'kraken')} does.{/if}</p>
+        {:else if res.standIn}<p class="dim small">{venueName(venue)} has no {pair}; showing {res.base}/{res.quote}.</p>{/if}
         <dl class="mono">
           <dt>Books kept live</dt><dd>{int(totals?.books)}</dd>
           <dt>Messages / s</dt><dd>{int(totals?.msgs)}</dd>
@@ -385,7 +417,7 @@
   </main>
 
   <section class="table" class:sr-only={!showTable} aria-label="Order book table">
-    <h2>{venue} {PAIRS[pair].label} order book ({table?.status ?? '…'})</h2>
+    <h2>{venue} {res ? `${res.base}/${res.quote}` : pair} order book ({table?.status ?? '…'})</h2>
     {#if table}
       <table class="mono">
         <thead><tr><th>Side</th><th>Price</th><th>Size</th><th>Total</th></tr></thead>
@@ -410,6 +442,7 @@
   .seg button:first-child { border-radius: 6px 0 0 6px; }
   .seg button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
   .seg button.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .seg button.unlisted:not(.on) { color: var(--dim); text-decoration: line-through; }
   .spacer { flex: 1; }
   main { flex: 1; display: flex; min-height: 0; }
   .stage { flex: 1; position: relative; min-width: 0; touch-action: none; }
