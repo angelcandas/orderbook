@@ -109,3 +109,23 @@ first close instead of a true gap.
 - A small user formula language for indicators and alerts, in the spirit of
   Pine Script, evaluated in the analytics worker.
 - Spread shown in ticks ("pips") as well as basis points.
+
+## Analysis window and explanations
+
+Drag a box over the candle chart (the **window** button over the chart, or
+shift+drag at any time) to search for patterns only inside it. Detection then
+runs over the bars in the box, plus up to 60 bars before it that only warm up
+ATR, EMAs and average bodies (`src/patterns/window.ts`); a pattern must start
+inside the box, and its prices must overlap the box's price band. The box is
+kept in candle times and prices, so it stays put while new candles arrive and
+across interval changes, and is cleared on a pair or venue switch. **clear**
+goes back to the whole history.
+
+**explain** (over the chart, or under *Chart patterns*) writes a plain-language
+note per pattern: what the shape is and usually implies, when it formed, whether
+it is forming, confirmed or failed, the breakout, the measured target with its
+distance from the last price, the stop, and how it played out since
+(`src/patterns/explain.ts`). Neutral candle and volatility signals (doji, inside
+bars, NR4 / NR7) are counted in the summary rather than listed. Without a window
+it covers the chart patterns and the latest twelve directional candle signals.
+The text is generated locally from fixed templates, not by a language model.

@@ -6,7 +6,8 @@ import type { FeedStats, RenderStats } from '../workers/protocol';
 import type { SceneSettings } from '../render/scene';
 import type { PatternHit } from '../patterns/types';
 import type { LayoutPrefs } from '../render/layout';
-import type { ZoomPane, ZoomState } from '../workers/protocol';
+import type { WindowPicked, ZoomPane, ZoomState } from '../workers/protocol';
+import type { AnalysisWindow } from '../patterns/window';
 import type { Outcome } from '../patterns/detect';
 import type { LiqStats } from '../workers/liquidation.worker';
 import { armed, type Alert, type AlertHit } from '../alerts/alerts';
@@ -44,7 +45,11 @@ export interface Snapshot {
   feeds: Partial<Record<Venue, FeedStats>>;
   render: RenderStats | null;
   main: MainStats;
-  patterns: { list: PatternHit[]; outcomes: Outcome[]; computeMs: number; candles: number; backfill: number; source: string };
+  patterns: {
+    list: PatternHit[]; outcomes: Outcome[]; computeMs: number; candles: number; backfill: number; source: string;
+    /** the window the list was searched in (null: all history); candle open times; last price */
+    window: AnalysisWindow | null; t: Float64Array; last: number; symbol: string;
+  };
   liq: LiqStats | null;
 }
 
@@ -77,6 +82,10 @@ export class Engine {
   private focusId = 0;
   private sent: Record<Venue, string> = { kraken: '', binance: '' };
   onZoom: (z: ZoomState) => void = () => {};
+  /** a box dragged on the candle chart became the analysis window (null: too small, nothing changed) */
+  onWindow: (w: AnalysisWindow | null) => void = () => {};
+  /** fresh pattern detection arrived for the focused venue */
+  onPatterns: (p: Snapshot['patterns']) => void = () => {};
 
   constructor(private o: EngineOptions) {
     // written out in full so the bundler can find and build each worker
@@ -87,7 +96,7 @@ export class Engine {
     this.analytics = new Worker(new URL('../workers/analytics.worker.ts', import.meta.url), { type: 'module', name: 'analytics' });
     this.render = new Worker(new URL('../workers/render.worker.ts', import.meta.url), { type: 'module', name: 'render' });
     this.liq = new Worker(new URL('../workers/liquidation.worker.ts', import.meta.url), { type: 'module', name: 'liquidations' });
-    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '' }, liq: null };
+    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, t: new Float64Array(0), last: NaN, symbol: '' }, liq: null };
 
     const fr = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const fa = { kraken: new MessageChannel(), binance: new MessageChannel() };
@@ -114,7 +123,11 @@ export class Engine {
     this.analytics.postMessage({ type: 'init', renderPort: ar.port1, feedPorts: [fa.kraken.port2, fa.binance.port2] }, [ar.port1, fa.kraken.port2, fa.binance.port2]);
     this.analytics.onmessage = (e) => {
       if (e.data.type === 'patterns' && e.data.venue === this.o.venue) {
-        this.snap.patterns = { list: e.data.patterns, outcomes: e.data.outcomes, computeMs: e.data.computeMs, candles: e.data.candles, backfill: e.data.backfill ?? 0, source: e.data.source ?? '' };
+        this.snap.patterns = {
+          list: e.data.patterns, outcomes: e.data.outcomes, computeMs: e.data.computeMs, candles: e.data.candles, backfill: e.data.backfill ?? 0, source: e.data.source ?? '',
+          window: e.data.window ?? null, t: e.data.t ?? new Float64Array(0), last: e.data.last ?? NaN, symbol: e.data.symbol ?? '',
+        };
+        this.onPatterns({ ...this.snap.patterns });
       }
     };
 
@@ -137,6 +150,11 @@ export class Engine {
       if (e.data.type === 'stats') this.snap.render = e.data;
       else if (e.data.type === 'selected') this.onSelected(e.data.id);
       else if (e.data.type === 'zoom') this.onZoom(e.data);
+      else if (e.data.type === 'window') {
+        const w = (e.data as WindowPicked).window;
+        if (w) this.analytics.postMessage({ type: 'window', window: w });
+        this.onWindow(w);
+      }
     };
 
     this.applyFocus();
@@ -232,11 +250,21 @@ export class Engine {
     this.render.postMessage({ type: 'settings', settings: { venueLabel: this.o.venue.toUpperCase(), pairLabel: label } });
   }
 
-  setVenue(v: Venue): void { this.o.venue = v; this.applyFocus(); }
+  setVenue(v: Venue): void { this.setWindow(null); this.o.venue = v; this.applyFocus(); }
+  /** Search patterns inside this box only (null: the whole history). */
+  setWindow(w: AnalysisWindow | null): void {
+    this.analytics.postMessage({ type: 'window', window: w });
+    this.render.postMessage({ type: 'settings', settings: { analysisWindow: w } });
+  }
+  /** a box being dragged on the candle chart, in canvas px */
+  brush(x0: number, y0: number, x1: number, y1: number, phase: 'move' | 'end' | 'cancel'): void {
+    this.render.postMessage({ type: 'brush', x0, y0, x1, y1, phase });
+  }
   /** switch pair in place: feeds resubscribe only the books that change, no reconnect */
   setPair(label: string): void {
     this.o.pair = label;
     this.focusId++;
+    this.setWindow(null);
     this.analytics.postMessage({ type: 'reset' });
     this.syncSymbols();
     this.applyFocus();

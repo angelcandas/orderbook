@@ -6,7 +6,7 @@ import { Histogram, nowAbs } from '../shared/hist';
 import { H, VIEW_LEN, seqRead, wrapView } from '../shared/view';
 import type { Venue } from '../shared/config';
 import type { AnalyticsOut } from '../patterns/types';
-import type { RenderCmd, RenderStats, ZoomPane, ZoomState } from './protocol';
+import type { RenderCmd, RenderStats, WindowPicked, ZoomPane, ZoomState } from './protocol';
 import { DEFAULT_LAYOUT, ZOOM, normalizeLayout, type LayoutPrefs } from '../render/layout';
 
 let FONT: number = ZOOM.font.def;
@@ -208,6 +208,20 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
       settings.selectedPattern = hit ? (settings.selectedPattern === hit.id ? null : hit.id) : settings.selectedPattern;
       if (hit) postMessage({ type: 'selected', id: settings.selectedPattern });
       dirty = PANE_ALL;
+      break;
+    }
+    case 'brush': {
+      if (m.phase === 'move') scene.brush = { x0: m.x0, y0: m.y0, x1: m.x1, y1: m.y1 };
+      else {
+        scene.brush = null;
+        if (m.phase === 'end') {
+          const w = scene.windowFromPx(m.x0, m.y0, m.x1, m.y1);
+          if (w) settings.analysisWindow = w;
+          const out: WindowPicked = { type: 'window', window: w };
+          postMessage(out);
+        }
+      }
+      dirty |= PANE_CANDLES;
       break;
     }
     case 'wheel': {
