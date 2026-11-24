@@ -1,6 +1,7 @@
 import type { Book } from '../engine/book';
 import type { Candle } from '../patterns/candle';
 import type { Status } from '../shared/view';
+import type { Market } from '../shared/pairs';
 
 export interface FeedCounters {
   msgs: number;
@@ -29,6 +30,8 @@ export interface FeedSink {
   onHistory(symbol: string, candles: Candle[], source: string): void;
   /** parse + apply time of one message, ms */
   onTiming(parseMs: number, applyMs: number, levels: number): void;
+  /** every market the venue lists, once per connection (feeds the pair picker) */
+  onMarkets?(markets: Market[]): void;
   log(msg: string): void;
 }
 

@@ -1,16 +1,33 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Engine, type Snapshot, type LadderRow } from './engine';
-  import { PAIRS, INTERVALS, LIVE, localEndpoints, type Interval, type Venue } from '../shared/config';
+  import { INTERVALS, LIVE, localEndpoints, type Interval, type Venue } from '../shared/config';
+  import {
+    allPairs, builtinCatalog, loadCachedCatalog, loadFavourites, MarketIndex, quoteRanking,
+    saveCachedCatalog, saveFavourites, splitLabel, toggleFavourite, type Catalog,
+  } from '../shared/pairs';
+  import PairPicker from './PairPicker.svelte';
   import type { SceneSettings } from '../render/scene';
   import type { PatternHit } from '../patterns/types';
   import LiquidationHeatmap from './LiquidationHeatmap.svelte';
+  import { HEADER_CTRL_W } from '../render/scene';
+  import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs } from '../render/layout';
+  import type { ZoomPane } from '../workers/protocol';
+  import { loadPrefs, savePrefs, defaultPrefs, SIDE_W, type ViewPrefs } from './prefs';
 
   const q = new URLSearchParams(location.search);
   let source = $state<'live' | 'local'>(q.get('src') === 'local' ? 'local' : 'live');
   let host = q.get('host') ?? 'localhost:8787';
   let venue = $state<Venue>((q.get('venue') as Venue) ?? 'kraken');
-  let pair = $state(Math.max(0, PAIRS.findIndex((p) => p.label === (q.get('pair') ?? 'BTC/USD'))));
+  let pair = $state(splitLabel(q.get('pair') ?? '') ? q.get('pair')!.toUpperCase() : 'BTC/USD');
+  let favourites = $state(loadFavourites());
+  // what each venue lists: the built in pairs, then the cache, then the venues' own lists as they arrive
+  const initialCatalog = (): Catalog => ({ ...builtinCatalog(), ...(source === 'live' ? loadCachedCatalog() : {}) });
+  let catalog = $state.raw<Catalog>(initialCatalog());
+  let entries = $derived(allPairs(catalog));
+  let quotes = $derived(quoteRanking(catalog));
+  let index = $derived({ kraken: new MarketIndex(catalog.kraken), binance: new MarketIndex(catalog.binance) });
+  let res = $derived(index[venue].resolve(pair));
   let group = $state(Number(q.get('group') ?? 1));
   let interval = $state<Interval>((Number(q.get('interval')) as Interval) || 15);
   let load = $state(Number(q.get('pairs') ?? 1));
@@ -20,7 +37,19 @@
   let reducedMotion = $state(matchMedia('(prefers-reduced-motion: reduce)').matches);
   let showTable = $state(false);
   let showLiq = $state(q.get('liq') !== '0');
+  // futures are quoted in USDT whatever the spot quote: BTC/USD, BTC/EUR -> BTCUSDT
+  let liqSpot = $derived(`${splitLabel(pair)?.base ?? 'BTC'}USDT`);
   let selected = $state<string | null>(null);
+
+  // layout + zoom, remembered in this browser ($state.raw: plain objects, so they can be posted to the worker)
+  const saved = loadPrefs();
+  let layoutPrefs = $state.raw<LayoutPrefs>(saved.layout);
+  let sideW = $state(saved.sideW);
+  let fontPx = $state(saved.fontPx);
+  let zoomState = { candlesVisible: saved.candlesVisible, depthRangePct: saved.depthRangePct, ladderRowPad: saved.ladderRowPad };
+  let stageW = $state(0), stageH = $state(0);
+  let panes = $derived(stageW ? computeLayout(stageW, stageH, layoutPrefs) : null);
+  const persist = () => savePrefs({ layout: layoutPrefs, sideW, fontPx, ...zoomState } satisfies ViewPrefs);
 
   let stats = $state<Snapshot | null>(null);
   let table = $state<{ status: string; bids: LadderRow[]; asks: LadderRow[]; decimals: number } | null>(null);
@@ -31,9 +60,9 @@
   let tableTimer: any;
 
   const settings = (): SceneSettings => ({
-    depthRangePct: 0, candlesVisible: 160, reducedMotion,
+    depthRangePct: zoomState.depthRangePct, candlesVisible: zoomState.candlesVisible, ladderRowPad: zoomState.ladderRowPad, reducedMotion,
     showChartPatterns: showChart, showCandlePatterns: showCandle, selectedPattern: selected,
-    venueLabel: venue.toUpperCase(), pairLabel: PAIRS[pair].label,
+    venueLabel: venue.toUpperCase(), pairLabel: res ? `${res.base}/${res.quote}` : pair,
   });
 
   function start() {
@@ -44,9 +73,20 @@
       endpoints: source === 'local' ? localEndpoints(host) : LIVE,
       pairCount: load,
       depth: { kraken: source === 'local' ? 1000 : 500, binance: 1000 },
-      venue, pair, group, interval, settings: settings(), theme,
+      venue, pair, catalog, group, interval, settings: settings(), theme, layout: layoutPrefs, fontPx,
     });
+    engine.onZoom = (z) => {
+      zoomState = { candlesVisible: z.candlesVisible, depthRangePct: z.depthRangePct, ladderRowPad: z.ladderRowPad };
+      persist();
+    };
     engine.onStats = (s) => (stats = s);
+    const src = source;
+    engine.onMarkets = (v, markets) => {
+      if (!markets.length) return;
+      catalog = { ...catalog, [v]: markets };
+      if (src === 'live') saveCachedCatalog(v, markets);
+      engine?.setCatalog(catalog);
+    };
     engine.onSelected = (id) => (selected = id);
     (window as any).__depthline = engine;
   }
@@ -58,7 +98,7 @@
   }
 
   function syncUrl() {
-    const p = new URLSearchParams({ src: source, venue, pair: PAIRS[pair].label, group: String(group), interval: String(interval), pairs: String(load), theme });
+    const p = new URLSearchParams({ src: source, venue, pair, group: String(group), interval: String(interval), pairs: String(load), theme });
     if (source === 'local') p.set('host', host);
     if (!showLiq) p.set('liq', '0');
     history.replaceState(null, '', `?${p}`);
@@ -69,6 +109,7 @@
     start();
     ro = new ResizeObserver(() => {
       const r = canvasHost.getBoundingClientRect();
+      stageW = r.width; stageH = r.height;
       engine?.resize(r.width, r.height);
     });
     ro.observe(canvasHost);
@@ -104,7 +145,19 @@
       books: sum((s) => s.books),
     };
   });
-  let focusStatus = $derived(stats?.feeds[venue]?.status[PAIRS[pair][venue]] ?? 'connecting');
+  let focusStatus = $derived(res ? stats?.feeds[venue]?.status[res.symbol] ?? 'connecting' : 'not listed');
+  const venueName = (v: Venue) => (v === 'kraken' ? 'Kraken' : 'Binance');
+
+  function pickPair(label: string) {
+    pair = label;
+    selected = null;
+    engine?.setPair(pair);
+    syncUrl();
+  }
+  function favourite(label: string) {
+    favourites = toggleFavourite(favourites, label);
+    saveFavourites(favourites);
+  }
   const order = { forming: 0, confirmed: 1, failed: 2 } as const;
   let chartPatterns = $derived((stats?.patterns.list ?? []).filter((p: PatternHit) => p.family === 'chart').slice().sort((a, b) => order[a.status] - order[b.status] || b.end - a.end));
   let candlePats = $derived((stats?.patterns.list ?? []).filter((p: PatternHit) => p.family !== 'chart').slice(-12).reverse());
@@ -114,27 +167,107 @@
     engine?.setSettings({ selectedPattern: selected });
   }
   const groups = [1, 10, 100, 1000];
+
+  // ---- zoom buttons and resize handles over the canvas ----
+  const paneNames: Record<ZoomPane, string> = { ladder: 'order book', depth: 'depth chart', candles: 'candle chart' };
+  const zoomTips: Record<ZoomPane, [string, string]> = {
+    ladder: ['Shorter rows, more price levels', 'Taller rows, fewer price levels'],
+    depth: ['Wider price range', 'Narrower price range'],
+    candles: ['More candles', 'Fewer candles'],
+  };
+  const zoom = (e: Event, pane: ZoomPane, dir: 1 | -1 | 0) => { e.stopPropagation(); engine?.zoom(pane, dir); };
+
+  function setLayout(next: LayoutPrefs) {
+    layoutPrefs = next;
+    engine?.setLayout(next);
+  }
+  /** Drag a split. `which`: the ladder edge or the depth / candles edge. */
+  function dragStart(e: PointerEvent, which: 'ladder' | 'depth') {
+    e.stopPropagation();
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    let raf = 0, lx = 0, ly = 0;
+    const apply = () => {
+      raf = 0;
+      const r = canvasHost.getBoundingClientRect();
+      setLayout(dragSplit(layoutPrefs, which, lx - r.left, ly - r.top, r.width, r.height));
+    };
+    // at most one relayout per frame, however fast the pointer reports
+    const move = (ev: PointerEvent) => { lx = ev.clientX; ly = ev.clientY; if (!raf) raf = requestAnimationFrame(apply); };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (raf) { cancelAnimationFrame(raf); apply(); }
+      persist();
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+  function splitKey(e: KeyboardEvent, which: 'ladder' | 'depth') {
+    const vertical = panes && !panes.narrow && which === 'ladder';
+    const d = (vertical ? { ArrowLeft: -1, ArrowRight: 1 } : { ArrowUp: -1, ArrowDown: 1 } as Record<string, number>)[e.key as 'ArrowLeft'];
+    if (!d) return;
+    e.preventDefault();
+    const mode = panes?.narrow ? 'narrow' : 'wide';
+    const cur = layoutPrefs[mode][which];
+    setLayout({ ...layoutPrefs, [mode]: { ...layoutPrefs[mode], [which]: Math.max(0.05, Math.min(0.95, cur + d * 0.02)) } });
+    persist();
+  }
+  function resetSplit(which: 'ladder' | 'depth') {
+    const mode = panes?.narrow ? 'narrow' : 'wide';
+    setLayout({ ...layoutPrefs, [mode]: { ...layoutPrefs[mode], [which]: DEFAULT_LAYOUT[mode][which] } });
+    persist();
+  }
+  function dragSide(e: PointerEvent) {
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => { sideW = Math.round(Math.max(SIDE_W.min, Math.min(SIDE_W.max, innerWidth - ev.clientX))); };
+    const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); persist(); };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+  function sideKey(e: KeyboardEvent) {
+    const d = e.key === 'ArrowLeft' ? 20 : e.key === 'ArrowRight' ? -20 : 0;
+    if (!d) return;
+    e.preventDefault();
+    sideW = Math.max(SIDE_W.min, Math.min(SIDE_W.max, sideW + d));
+    persist();
+  }
+  function setFont() { engine?.setFont(fontPx); persist(); }
+  function resetView() {
+    const d = defaultPrefs();
+    setLayout(d.layout);
+    sideW = d.sideW;
+    fontPx = d.fontPx;
+    engine?.setFont(fontPx);
+    for (const p of ['ladder', 'depth', 'candles'] as ZoomPane[]) engine?.zoom(p, 0);
+    zoomState = { candlesVisible: d.candlesVisible, depthRangePct: d.depthRangePct, ladderRowPad: d.ladderRowPad };
+    persist();
+  }
 </script>
 
 <div class="shell">
   <header>
     <strong class="brand">Depthline</strong>
     <label>Source
-      <select bind:value={source} onchange={() => { syncUrl(); restart(); }}>
+      <select bind:value={source} onchange={() => { catalog = initialCatalog(); syncUrl(); restart(); }}>
         <option value="live">Live exchanges</option>
         <option value="local">Local emulator</option>
       </select>
     </label>
     <div class="seg" role="group" aria-label="Venue">
       {#each ['kraken', 'binance'] as v}
-        <button class:on={venue === v} onclick={() => { venue = v as Venue; engine?.setVenue(venue); selected = null; syncUrl(); }}>{v === 'kraken' ? 'Kraken' : 'Binance'}</button>
+        <button class:on={venue === v} class:unlisted={!index[v as Venue].resolve(pair)}
+          title={index[v as Venue].resolve(pair) ? '' : `${venueName(v as Venue)} doesn't list ${pair}`}
+          onclick={() => { venue = v as Venue; engine?.setVenue(venue); selected = null; syncUrl(); }}>{venueName(v as Venue)}</button>
       {/each}
     </div>
-    <label>Pair
-      <select bind:value={pair} onchange={() => { selected = null; if (pair >= load) restart(); else engine?.setPair(pair); syncUrl(); }}>
-        {#each PAIRS as p, i}<option value={i}>{p.label}</option>{/each}
-      </select>
-    </label>
+    <PairPicker {pair} {entries} {quotes} {favourites} {venue} resolve={(v, l) => index[v].resolve(l)} onpick={pickPair} onfavourite={favourite} />
     <label>Group
       <select bind:value={group} onchange={() => { engine?.setGroup(group); syncUrl(); }}>
         {#each groups as g}<option value={g}>{g === 1 ? 'tick' : `${g} ticks`}</option>{/each}
@@ -160,11 +293,46 @@
       onpointermove={(e) => ptr(e)} onpointerleave={(e) => ptr(e, false)} onclick={click} onwheel={wheel}
       role="application" aria-label="Order book, depth chart and candle chart. A text table of the book follows the chart.">
       {#key generation}<canvas></canvas>{/key}
+      {#if panes}
+        {#each (['ladder', 'depth', 'candles'] as ZoomPane[]) as p}
+          {@const r = panes[p]}
+          <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+          <div class="zoom" role="group" aria-label="Zoom {paneNames[p]}" style="left:{r.x + r.w - HEADER_CTRL_W}px; top:{r.y + 2}px; width:{HEADER_CTRL_W - 4}px" onclick={(e) => e.stopPropagation()}>
+            <button title={zoomTips[p][0]} aria-label="Zoom out {paneNames[p]}" onclick={(e) => zoom(e, p, -1)}>−</button>
+            <button title={zoomTips[p][1]} aria-label="Zoom in {paneNames[p]}" onclick={(e) => zoom(e, p, 1)}>+</button>
+            <button title={p === 'depth' ? 'Auto-fit the price range' : 'Default zoom'} aria-label="Reset zoom {paneNames[p]}" onclick={(e) => zoom(e, p, 0)}>fit</button>
+          </div>
+        {/each}
+        {#if panes.narrow}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div class="split h" role="separator" aria-orientation="horizontal" aria-label="Resize order book" tabindex="0" aria-valuemin={5} aria-valuemax={95} aria-valuenow={Math.round(layoutPrefs[panes.narrow ? 'narrow' : 'wide']['ladder'] * 100)}
+            style="top:{panes.ladder.h - 4}px; left:0; width:{stageW}px"
+            onpointerdown={(e) => dragStart(e, 'ladder')} onkeydown={(e) => splitKey(e, 'ladder')} ondblclick={() => resetSplit('ladder')}></div>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div class="split h" role="separator" aria-orientation="horizontal" aria-label="Resize depth chart" tabindex="0" aria-valuemin={5} aria-valuemax={95} aria-valuenow={Math.round(layoutPrefs[panes.narrow ? 'narrow' : 'wide']['depth'] * 100)}
+            style="top:{panes.candles.y - 4}px; left:0; width:{stageW}px"
+            onpointerdown={(e) => dragStart(e, 'depth')} onkeydown={(e) => splitKey(e, 'depth')} ondblclick={() => resetSplit('depth')}></div>
+        {:else}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div class="split v" role="separator" aria-orientation="vertical" aria-label="Resize order book" tabindex="0" aria-valuemin={5} aria-valuemax={95} aria-valuenow={Math.round(layoutPrefs[panes.narrow ? 'narrow' : 'wide']['ladder'] * 100)}
+            style="left:{panes.ladder.w - 4}px; top:0; height:{stageH}px"
+            onpointerdown={(e) => dragStart(e, 'ladder')} onkeydown={(e) => splitKey(e, 'ladder')} ondblclick={() => resetSplit('ladder')}></div>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div class="split h" role="separator" aria-orientation="horizontal" aria-label="Resize depth chart" tabindex="0" aria-valuemin={5} aria-valuemax={95} aria-valuenow={Math.round(layoutPrefs[panes.narrow ? 'narrow' : 'wide']['depth'] * 100)}
+            style="top:{panes.depth.h - 4}px; left:{panes.depth.x}px; width:{panes.depth.w}px"
+            onpointerdown={(e) => dragStart(e, 'depth')} onkeydown={(e) => splitKey(e, 'depth')} ondblclick={() => resetSplit('depth')}></div>
+        {/if}
+      {/if}
     </div>
 
-    <aside>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div class="split v side" role="separator" aria-orientation="vertical" aria-label="Resize side panel" tabindex="0" aria-valuemin={SIDE_W.min} aria-valuemax={SIDE_W.max} aria-valuenow={sideW}
+      onpointerdown={dragSide} onkeydown={sideKey} ondblclick={() => { sideW = SIDE_W.def; persist(); }}></div>
+    <aside style="--side-w:{sideW}px">
       <section>
-        <h2>Feed integrity <span class="pill" class:ok={focusStatus.startsWith('live')} class:bad={focusStatus.startsWith('error')}>{focusStatus}</span></h2>
+        <h2>Feed integrity <span class="pill" class:ok={focusStatus.startsWith('live')} class:bad={focusStatus.startsWith('error') || focusStatus === 'not listed'}>{focusStatus}</span></h2>
+        {#if !res}<p class="dim small">{venueName(venue)} doesn't list {pair}.{#if index[venue === 'kraken' ? 'binance' : 'kraken'].resolve(pair)}{' '}{venueName(venue === 'kraken' ? 'binance' : 'kraken')} does.{/if}</p>
+        {:else if res.standIn}<p class="dim small">{venueName(venue)} has no {pair}; showing {res.base}/{res.quote}.</p>{/if}
         <dl class="mono">
           <dt>Books kept live</dt><dd>{int(totals?.books)}</dd>
           <dt>Messages / s</dt><dd>{int(totals?.msgs)}</dd>
@@ -243,20 +411,25 @@
         <label class="tog"><input type="checkbox" bind:checked={reducedMotion} onchange={() => engine?.setSettings({ reducedMotion })} /> Reduce motion (no flashes)</label>
         <label class="tog"><input type="checkbox" bind:checked={showTable} /> Show text table</label>
         <label class="tog"><input type="checkbox" bind:checked={showLiq} onchange={syncUrl} /> Liquidation heatmap</label>
-        <button class="link" onclick={() => engine?.setSettings({ depthRangePct: 0 })}>Auto-fit depth chart</button>
-        <p class="dim small">Scroll over the depth chart or candles to zoom. Click a pattern label to select it.</p>
+        <label class="tog">Text size
+          <select bind:value={fontPx} onchange={setFont}>
+            {#each Array.from({ length: ZOOM.font.max - ZOOM.font.min + 1 }, (_, i) => ZOOM.font.min + i) as px}<option value={px}>{px}px</option>{/each}
+          </select>
+        </label>
+        <button class="link" onclick={resetView}>Reset layout and zoom</button>
+        <p class="dim small">Scroll over a panel, or use its − + fit buttons, to zoom it. Drag the lines between panels to resize them (double-click one to reset it). Layout and zoom are remembered in this browser. Click a pattern label to select it.</p>
       </section>
     </aside>
   </main>
 
   {#if showLiq}
     {#key source}
-      <LiquidationHeatmap spot={PAIRS[pair].binance} mode={source === 'local' ? 'synthetic' : 'live'} {theme} />
+      <LiquidationHeatmap spot={liqSpot} mode={source === 'local' ? 'synthetic' : 'live'} {theme} />
     {/key}
   {/if}
 
   <section class="table" class:sr-only={!showTable} aria-label="Order book table">
-    <h2>{venue} {PAIRS[pair].label} order book ({table?.status ?? '…'})</h2>
+    <h2>{venue} {res ? `${res.base}/${res.quote}` : pair} order book ({table?.status ?? '…'})</h2>
     {#if table}
       <table class="mono">
         <thead><tr><th>Side</th><th>Price</th><th>Size</th><th>Total</th></tr></thead>
@@ -281,11 +454,20 @@
   .seg button:first-child { border-radius: 6px 0 0 6px; }
   .seg button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
   .seg button.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .seg button.unlisted:not(.on) { color: var(--dim); text-decoration: line-through; }
   .spacer { flex: 1; }
   main { flex: 1; display: flex; min-height: 0; }
   .stage { flex: 1; position: relative; min-width: 0; touch-action: none; }
   .stage :global(canvas) { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  aside { width: 310px; overflow-y: auto; border-left: 1px solid var(--line); padding: 4px 14px 16px; }
+  .zoom { position: absolute; display: flex; justify-content: flex-end; gap: 2px; z-index: 2; }
+  .zoom button { padding: 0 6px; height: 18px; line-height: 16px; font-size: 12px; min-width: 22px; background: var(--panel); color: var(--dim); }
+  .zoom button:hover { color: var(--text); border-color: var(--dim); }
+  .split { position: absolute; z-index: 3; touch-action: none; }
+  .split.v { width: 8px; cursor: col-resize; }
+  .split.h { height: 8px; cursor: row-resize; }
+  .split:hover, .split:focus-visible { background: color-mix(in srgb, var(--accent) 35%, transparent); outline: none; }
+  .split.side { position: relative; flex: none; margin: 0 -4px; align-self: stretch; }
+  aside { width: var(--side-w, 310px); overflow-y: auto; border-left: 1px solid var(--line); padding: 4px 14px 16px; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 14px 0 6px; display: flex; align-items: center; gap: 8px; }
   dl { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; margin: 0; font-size: 12px; }
   dt { color: var(--dim); font-family: ui-sans-serif, system-ui, sans-serif; }
@@ -319,6 +501,7 @@
     header { padding: 8px 16px; }
     main { flex-direction: column; overflow-y: auto; }
     .stage { flex: none; height: 78vh; }
+    .split.side { display: none; }
     aside { width: auto; border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
   }
 </style>

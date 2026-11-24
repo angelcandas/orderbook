@@ -155,6 +155,7 @@ async function pollOi(g: number): Promise<void> {
   if (!oiOk) { map.openFromVolume(); return; }
   try {
     const r = await fetch(`${restBase}/fapi/v1/openInterest?symbol=${symbol}`);
+    if (r.status === 400) { if (g === gen) { status = `error: no ${symbol} perpetual`; post(); teardown(); } return; }
     if (!r.ok) throw new Error(String(r.status));
     const j = await r.json();
     if (g === gen) map.openInterest(+j.openInterest);

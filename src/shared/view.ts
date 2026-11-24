@@ -43,8 +43,10 @@ export enum Status {
   Live = 2,
   Resyncing = 3,
   Error = 4,
+  /** the venue doesn't list the focused pair */
+  Unlisted = 5,
 }
-export const STATUS_NAMES = ['connecting', 'syncing', 'live', 'resyncing', 'error'];
+export const STATUS_NAMES = ['connecting', 'syncing', 'live', 'resyncing', 'error', 'not listed'];
 
 export const sabSupported = (): boolean =>
   typeof SharedArrayBuffer !== 'undefined' && (globalThis as any).crossOriginIsolated === true;
