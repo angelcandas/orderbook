@@ -2,10 +2,13 @@ import { Gfx, withAlpha, type RGBA } from './gl';
 import type { Theme } from './theme';
 import { H, LAD_BID, LAD_ASK, DEP_BID, DEP_ASK, LADDER, STATUS_NAMES } from '../shared/view';
 import type { AnalyticsOut, PatternHit } from '../patterns/types';
+import { computeLayout, DEFAULT_LAYOUT, type LayoutPrefs, type Rect } from './layout';
 
 export interface SceneSettings {
   depthRangePct: number; // half-width of the depth chart around the mid, percent
   candlesVisible: number;
+  /** extra px between ladder rows on top of the text height: the ladder's zoom */
+  ladderRowPad?: number;
   reducedMotion: boolean;
   showChartPatterns: boolean;
   showCandlePatterns: boolean;
@@ -14,11 +17,12 @@ export interface SceneSettings {
   pairLabel: string;
 }
 
-interface Rect { x: number; y: number; w: number; h: number }
 
 const FLASH_MS = 400;
 export const PANE_LADDER = 1, PANE_DEPTH = 2, PANE_CANDLES = 4, PANE_ALL = 7;
 const HEADER = 22;
+/** px kept free at the right of each pane header for the zoom buttons drawn over it */
+export const HEADER_CTRL_W = 92;
 
 /**
  * Draws the whole market view into one WebGL2 canvas: ladder (left), depth
@@ -45,21 +49,11 @@ export class Scene {
 
   constructor(private g: Gfx) {}
 
-  layout(w: number, h: number): void {
-    const narrow = w < 760;
-    if (narrow) {
-      const lh = Math.round(h * 0.42);
-      this.ladder = { x: 0, y: 0, w, h: lh };
-      const rest = h - lh;
-      this.depth = { x: 0, y: lh, w, h: Math.round(rest * 0.4) };
-      this.candles = { x: 0, y: lh + this.depth.h, w, h: rest - this.depth.h };
-    } else {
-      const lw = Math.min(360, Math.max(260, Math.round(w * 0.28)));
-      this.ladder = { x: 0, y: 0, w: lw, h };
-      const dh = Math.round(h * 0.36);
-      this.depth = { x: lw, y: 0, w: w - lw, h: dh };
-      this.candles = { x: lw, y: dh, w: w - lw, h: h - dh };
-    }
+  layout(w: number, h: number, prefs: LayoutPrefs = DEFAULT_LAYOUT): void {
+    const l = computeLayout(w, h, prefs);
+    this.ladder = l.ladder;
+    this.depth = l.depth;
+    this.candles = l.candles;
   }
 
   /**
@@ -109,10 +103,13 @@ export class Scene {
     const r = this.ladder;
     const ch = g.atlas.cellH;
     const cw = g.atlas.cellW;
-    this.header(r, `${s.venueLabel} ${s.pairLabel}  ORDER BOOK`, t);
     const status = STATUS_NAMES[v[H.status]] ?? '';
+    const full = `${s.venueLabel} ${s.pairLabel}  ORDER BOOK`;
+    // a narrow ladder drops the "ORDER BOOK" suffix so the title, status and zoom buttons fit
+    const fits = 16 + (full.length + status.length + 2) * cw + HEADER_CTRL_W <= r.w;
+    this.header(r, fits ? full : `${s.venueLabel} ${s.pairLabel}`, t);
     const stColor = status === 'live' ? t.bid : status === 'error' ? t.ask : t.warn;
-    g.textRight(r.x + r.w - 8, r.y + (HEADER - ch) / 2, status.toUpperCase(), stColor);
+    g.textRight(r.x + r.w - 8 - HEADER_CTRL_W, r.y + (HEADER - ch) / 2, status.toUpperCase(), stColor);
 
     const pd = Math.max(0, Math.min(10, v[H.priceDecimals] | 0));
     const gp = v[H.group];
@@ -120,7 +117,7 @@ export class Scene {
     const qd = Math.min(4, v[H.qtyDecimals] | 0);
     const nb = v[H.nLadBid] | 0;
     const na = v[H.nLadAsk] | 0;
-    const rowH = Math.round(ch + 3);
+    const rowH = Math.round(ch + (s.ladderRowPad ?? 3));
     const top = r.y + HEADER + 4;
     const colTitles = top;
     g.text(r.x + 8, colTitles, 'PRICE', t.dim);

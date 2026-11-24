@@ -5,6 +5,8 @@ import { Histogram, type HistSummary } from '../shared/hist';
 import type { FeedStats, RenderStats } from '../workers/protocol';
 import type { SceneSettings } from '../render/scene';
 import type { PatternHit } from '../patterns/types';
+import type { LayoutPrefs } from '../render/layout';
+import type { ZoomPane, ZoomState } from '../workers/protocol';
 import type { Outcome } from '../patterns/detect';
 
 export interface EngineOptions {
@@ -21,6 +23,8 @@ export interface EngineOptions {
   interval: Interval;
   settings: SceneSettings;
   theme: 'dark' | 'light';
+  layout?: LayoutPrefs;
+  fontPx?: number;
 }
 
 export interface MainStats {
@@ -64,6 +68,7 @@ export class Engine {
   /** bumped on each pair switch; the render worker sees it in the view and redraws */
   private focusId = 0;
   private sent: Record<Venue, string> = { kraken: '', binance: '' };
+  onZoom: (z: ZoomState) => void = () => {};
 
   constructor(private o: EngineOptions) {
     // written out in full so the bundler can find and build each worker
@@ -108,11 +113,12 @@ export class Engine {
       type: 'init', canvas: off, w: rect.width, h: rect.height, dpr: devicePixelRatio,
       views: { kraken: this.views.kraken.buffer, binance: this.views.binance.buffer }, shared: this.shared,
       feedPorts: { kraken: fr.kraken.port2, binance: fr.binance.port2 }, analyticsPort: ar.port2,
-      settings: o.settings, theme: o.theme,
+      settings: o.settings, theme: o.theme, layout: o.layout, fontPx: o.fontPx,
     }, [off, fr.kraken.port2, fr.binance.port2, ar.port2]);
     this.render.onmessage = (e) => {
       if (e.data.type === 'stats') this.snap.render = e.data;
       else if (e.data.type === 'selected') this.onSelected(e.data.id);
+      else if (e.data.type === 'zoom') this.onZoom(e.data);
     };
 
     this.applyFocus();
@@ -224,6 +230,9 @@ export class Engine {
   pointer(x: number, y: number, inside: boolean): void { this.render.postMessage({ type: 'pointer', x, y, in: inside }); }
   click(x: number, y: number): void { this.render.postMessage({ type: 'click', x, y }); }
   wheel(x: number, y: number, dy: number): void { this.render.postMessage({ type: 'wheel', x, y, dy }); }
+  zoom(pane: ZoomPane, dir: 1 | -1 | 0): void { this.render.postMessage({ type: 'zoom', pane, dir }); }
+  setLayout(layout: LayoutPrefs): void { this.o.layout = layout; this.render.postMessage({ type: 'layout', layout }); }
+  setFont(px: number): void { this.o.fontPx = px; this.render.postMessage({ type: 'font', px }); }
 
   resetStats(): void {
     this.rafH.reset();
