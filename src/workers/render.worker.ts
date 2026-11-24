@@ -6,9 +6,12 @@ import { Histogram, nowAbs } from '../shared/hist';
 import { H, VIEW_LEN, seqRead, wrapView } from '../shared/view';
 import type { Venue } from '../shared/config';
 import type { AnalyticsOut } from '../patterns/types';
-import type { RenderCmd, RenderStats } from './protocol';
+import type { RenderCmd, RenderStats, ZoomPane, ZoomState } from './protocol';
+import { DEFAULT_LAYOUT, ZOOM, normalizeLayout, type LayoutPrefs } from '../render/layout';
 
-const FONT = 11;
+let FONT: number = ZOOM.font.def;
+let layoutPrefs: LayoutPrefs = DEFAULT_LAYOUT;
+let viewW = 0, viewH = 0;
 let gfx: Gfx;
 let scene: Scene;
 let theme: Theme = DARK;
@@ -78,6 +81,31 @@ function frame(ts: number): void {
   }
 }
 
+function clampFont(px: number): number {
+  return Math.max(ZOOM.font.min, Math.min(ZOOM.font.max, Math.round(px) || ZOOM.font.def));
+}
+
+/** Zoom one pane in (+1), out (-1) or back to its default (0), then report the new state. */
+function zoom(pane: ZoomPane, dir: 1 | -1 | 0): void {
+  if (pane === 'candles') {
+    const c = ZOOM.candles;
+    settings.candlesVisible = dir === 0 ? c.def : Math.max(c.min, Math.min(c.max, Math.round(settings.candlesVisible * (dir < 0 ? 1.15 : 0.87))));
+    dirty |= PANE_CANDLES;
+  } else if (pane === 'depth') {
+    const d = ZOOM.depthPct;
+    // 0 = auto-fit; zooming starts from whatever range auto-fit is showing
+    settings.depthRangePct = dir === 0 ? 0 : Math.max(d.min, Math.min(d.max, scene.depthPct * (dir < 0 ? 1.2 : 0.83)));
+    dirty |= PANE_DEPTH;
+  } else {
+    const r = ZOOM.rowPad;
+    const cur = settings.ladderRowPad ?? r.def;
+    settings.ladderRowPad = dir === 0 ? r.def : Math.max(r.min, Math.min(r.max, cur + dir * 2));
+    dirty |= PANE_LADDER;
+  }
+  const z: ZoomState = { type: 'zoom', candlesVisible: settings.candlesVisible, depthRangePct: settings.depthRangePct, ladderRowPad: settings.ladderRowPad ?? ZOOM.rowPad.def };
+  postMessage(z);
+}
+
 function stats(): void {
   const iv = intervalH.summary();
   const s: RenderStats = {
@@ -100,11 +128,14 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
     case 'init': {
       shared = m.shared;
       settings = m.settings;
+      layoutPrefs = normalizeLayout(m.layout);
+      FONT = clampFont(m.fontPx ?? FONT);
+      viewW = m.w; viewH = m.h;
       theme = m.theme === 'light' ? LIGHT : DARK;
       gfx = new Gfx(m.canvas, FONT);
       gfx.resize(m.w, m.h, m.dpr, FONT);
       scene = new Scene(gfx);
-      scene.layout(m.w, m.h);
+      scene.layout(m.w, m.h, layoutPrefs);
       if (shared) {
         views.kraken = wrapView(m.views.kraken);
         views.binance = wrapView(m.views.binance);
@@ -128,7 +159,8 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
     }
     case 'resize':
       gfx.resize(m.w, m.h, m.dpr, FONT);
-      scene.layout(m.w, m.h);
+      viewW = m.w; viewH = m.h;
+      scene.layout(m.w, m.h, layoutPrefs);
       dirty = PANE_ALL;
       break;
     case 'venue':
@@ -152,12 +184,26 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
       break;
     }
     case 'wheel': {
-      const c = scene.candles, d = scene.depth;
-      if (m.x >= c.x && m.y >= c.y && m.y <= c.y + c.h) settings.candlesVisible = Math.max(30, Math.min(2000, Math.round(settings.candlesVisible * (m.dy > 0 ? 1.15 : 0.87))));
-      else if (m.x >= d.x && m.y >= d.y && m.y <= d.y + d.h) settings.depthRangePct = Math.max(0.01, Math.min(20, scene.depthPct * (m.dy > 0 ? 1.2 : 0.83)));
-      dirty = PANE_ALL;
+      const pane = scene.paneAt(m.x, m.y);
+      const dir = m.dy > 0 ? -1 : 1; // wheel down zooms out
+      if (pane === PANE_CANDLES) zoom('candles', dir);
+      else if (pane === PANE_DEPTH) zoom('depth', dir);
+      else if (pane === PANE_LADDER) zoom('ladder', dir);
       break;
     }
+    case 'zoom':
+      zoom(m.pane, m.dir);
+      break;
+    case 'layout':
+      layoutPrefs = normalizeLayout(m.layout);
+      scene.layout(viewW, viewH, layoutPrefs);
+      dirty = PANE_ALL;
+      break;
+    case 'font':
+      FONT = clampFont(m.px);
+      gfx.setFontPx(FONT);
+      dirty = PANE_ALL;
+      break;
     case 'settings':
       Object.assign(settings, m.settings);
       dirty = PANE_ALL;

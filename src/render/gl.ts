@@ -197,6 +197,9 @@ export class Gfx {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }
 
+  /** Change the text size, keeping the current device pixel ratio. */
+  setFontPx(fontPx: number): void { this.setFont(fontPx, this.dpr); }
+
   resize(w: number, h: number, dpr: number, fontPx: number): void {
     this.w = w;
     this.h = h;
