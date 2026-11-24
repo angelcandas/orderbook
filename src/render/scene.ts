@@ -11,6 +11,12 @@ export interface SceneSettings {
   candlesVisible: number;
   /** vertical zoom of the candle chart: 1 = fit the visible candles, >1 = zoomed in */
   candlesPriceScale?: number;
+  /** candles scrolled back from the newest, in bars (0 = following live) */
+  candlesOffset?: number;
+  /** vertical pan of the candle chart, in visible price ranges (0 = centred on the fit) */
+  candlesPricePan?: number;
+  /** horizontal pan of the depth chart's centre away from the mid, percent */
+  depthShiftPct?: number;
   /** extra px between ladder rows on top of the text height: the ladder's zoom */
   ladderRowPad?: number;
   reducedMotion: boolean;
@@ -32,7 +38,22 @@ const HEADER = 22;
 /** px kept free at the right of each pane header for the zoom buttons drawn over it */
 export const HEADER_CTRL_W = 92;
 /** candle chart price axis width and time strip height, css px (the page puts drag handles on them) */
-export const CANDLE_AXIS_W = 70, CANDLE_TIME_H = 24, PANE_HEADER = HEADER;
+export const CANDLE_AXIS_W = 70, CANDLE_TIME_H = 18, PANE_HEADER = HEADER;
+
+/**
+ * Where things sit inside the candle pane: price plot, the time strip right
+ * under it, then volume. Shared with the page, which puts the axis handles on it.
+ */
+export function candleGeom(r: Rect) {
+  const axisW = CANDLE_AXIS_W;
+  const volH = Math.round((r.h - HEADER) * 0.14);
+  const px = r.x + 8, pw = r.w - 16 - axisW;
+  const py = r.y + HEADER + 10;
+  const ph = Math.max(10, r.h - HEADER - 10 - CANDLE_TIME_H - volH - 6);
+  return { axisW, volH, px, pw, py, ph, timeY: py + ph, volBase: r.y + r.h - 4 };
+}
+/** The depth chart's price axis strip at the bottom of its pane, css px tall. */
+export const DEPTH_AXIS_H = 22;
 
 /**
  * Draws the whole market view into one WebGL2 canvas: ladder (left), depth
@@ -101,6 +122,33 @@ export class Scene {
       g.end(t.bg, this.candles, !cleared);
     }
     return anim;
+  }
+
+  /** Time labels in the strip under the price plot, about one per 90 px. */
+  private timeAxis(times: Float64Array, first: number, end: number, X: (i: number) => number, px: number, pw: number, y: number, t: Theme): void {
+    const g = this.g;
+    g.rect(px, y, pw, 1, t.grid);
+    const n = end - first;
+    if (n < 2) return;
+    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(pw / 90))));
+    const span = times[end - 1] - times[first];
+    const long = span > 36 * 3600e3; // more than a day and a half: show the date too
+    const ty = y + (CANDLE_TIME_H - g.atlas.cellH) / 2;
+    for (let i = end - 1; i >= first; i -= every) {
+      const d = new Date(times[i]);
+      const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const lbl = long ? `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}` : hm;
+      const x = X(i) - (lbl.length * g.atlas.cellW) / 2;
+      if (x < px || x + lbl.length * g.atlas.cellW > px + pw) continue;
+      g.rect(X(i), y, 1, 3, t.grid);
+      g.text(x, ty, lbl, t.dim);
+    }
+  }
+
+  /** Bar width in px and price plot height of the last candle draw, for scroll panning. */
+  candleScroll(): { step: number; ph: number; pw: number; n: number } | null {
+    const m = this.cmap;
+    return m ? { step: m.step, ph: m.ph, pw: m.pw, n: m.t.length } : null;
   }
 
   /** Turn a box dragged in px into candle times and prices, or null if it spans fewer than 3 candles. */
@@ -271,8 +319,9 @@ export class Scene {
       pct = Math.max(0.01, Math.min(20, (reach / mid) * 100 * 0.95));
     }
     this.depthPct = pct;
-    const lo = mid * (1 - pct / 100);
-    const hi = mid * (1 + pct / 100);
+    const ctr = mid * (1 + (s.depthShiftPct ?? 0) / 100);
+    const lo = ctr - mid * pct / 100;
+    const hi = ctr + mid * pct / 100;
     const px = r.x + 8, pw = r.w - 16 - 60;
     const py = r.y + HEADER + 8, ph = r.h - HEADER - 8 - 22;
     const X = (p: number) => px + ((p - lo) / (hi - lo)) * pw;
@@ -378,14 +427,14 @@ export class Scene {
       return false;
     }
     const N = a.c.length;
-    const vis = Math.max(20, Math.min(N, s.candlesVisible));
-    const first = N - vis;
-    const axisW = CANDLE_AXIS_W;
-    const px = r.x + 8, pw = r.w - 16 - axisW;
-    const volH = Math.round((r.h - HEADER) * 0.14);
-    const py = r.y + HEADER + 10, ph = r.h - HEADER - 10 - 24 - volH;
+    const vis = Math.max(Math.min(20, N), Math.min(N, Math.round(s.candlesVisible)));
+    // scrolled back: the view ends `off` bars before the newest
+    const off = Math.max(0, Math.min(N - vis, Math.round(s.candlesOffset ?? 0)));
+    const end = N - off;
+    const first = end - vis;
+    const { axisW, volH, px, pw, py, ph, timeY, volBase } = candleGeom(r);
     let lo = Infinity, hi = -Infinity, vmax = 0;
-    for (let i = first; i < N; i++) {
+    for (let i = first; i < end; i++) {
       if (a.l[i] < lo) lo = a.l[i];
       if (a.h[i] > hi) hi = a.h[i];
       if (a.v[i] > vmax) vmax = a.v[i];
@@ -393,9 +442,11 @@ export class Scene {
     const pad = (hi - lo) * 0.08 || hi * 0.001;
     lo -= pad; hi += pad;
     const ys = s.candlesPriceScale ?? 1;
-    if (ys !== 1 && ys > 0) {
-      // scale about the middle of the fitted range
-      const c = (lo + hi) / 2, half = (hi - lo) / 2 / ys;
+    const pan = s.candlesPricePan ?? 0;
+    if ((ys !== 1 && ys > 0) || pan) {
+      // scale about the middle of the fitted range, then pan by whole view heights
+      const half = (hi - lo) / 2 / (ys > 0 ? ys : 1);
+      const c = (lo + hi) / 2 + pan * 2 * half;
       lo = c - half; hi = c + half;
     }
     this.candlePlot.x = r.x + 1; this.candlePlot.y = py; this.candlePlot.w = r.w - axisW - 1; this.candlePlot.h = ph;
@@ -404,7 +455,7 @@ export class Scene {
     const X = (i: number) => px + (i - first + 0.5) * step;
     const Y = (p: number) => py + ((hi - p) / (hi - lo)) * ph;
     const pd = v[H.priceDecimals] | 0;
-    this.cmap = { first, N, step, px, pw, py, ph, lo, hi, t: a.t };
+    this.cmap = { first, N: end, step, px, pw, py, ph, lo, hi, t: a.t };
     // grid + axis
     for (let k = 0; k <= 5; k++) {
       const p = lo + ((hi - lo) * k) / 5;
@@ -412,9 +463,9 @@ export class Scene {
       g.rect(px, y, pw, 1, t.grid);
       g.number(r.x + r.w - 8, y - g.atlas.cellH / 2, p, pd, t.dim, false);
     }
-    if (s.showLiquidations !== false) this.liq.draw(g, a, first, N, step, X, Y, lo, hi, py, ph, px + pw - 4, t);
-    const volBase = r.y + r.h - 24;
-    for (let i = first; i < N; i++) {
+    if (s.showLiquidations !== false) this.liq.draw(g, a, first, end, step, X, Y, lo, hi, py, ph, px + pw - 4, t);
+    this.timeAxis(a.t, first, end, X, px, pw, timeY, t);
+    for (let i = first; i < end; i++) {
       const col = a.c[i] >= a.o[i] ? t.bid : t.ask;
       const vh = vmax > 0 ? (a.v[i] / vmax) * volH : 0;
       g.rect(X(i) - bw / 2, volBase - vh, bw, vh, withAlpha(col, 0.35));
@@ -433,7 +484,7 @@ export class Scene {
 
     // ---- price content, clipped to the plot ----
     g.begin();
-    for (let i = first; i < N; i++) {
+    for (let i = first; i < end; i++) {
       const col = a.c[i] >= a.o[i] ? t.bid : t.ask;
       const x = X(i);
       g.rect(x - 0.5, Y(a.h[i]), 1, Math.max(1, Y(a.l[i]) - Y(a.h[i])), col);
@@ -443,7 +494,7 @@ export class Scene {
     }
     // EMAs
     for (const [arr, col] of [[a.ema20, t.ema20], [a.ema50, t.ema50]] as const) {
-      for (let i = Math.max(first + 1, 1); i < N; i++) {
+      for (let i = Math.max(first + 1, 1); i < end; i++) {
         if (arr[i - 1] === arr[i - 1] && arr[i] === arr[i]) g.line(X(i - 1), Y(arr[i - 1]), X(i), Y(arr[i]), 1.2, col);
       }
     }
@@ -479,7 +530,7 @@ export class Scene {
     let labelRow = 0;
     for (const p of a.patterns) {
       if (p.family === 'chart' ? !s.showChartPatterns : !s.showCandlePatterns) continue;
-      if (p.end < first) continue;
+      if (p.end < first || p.start >= end) continue;
       const sel = s.selectedPattern === p.id;
       const col = p.bias > 0 ? t.bull : p.bias < 0 ? t.bear : t.neutral;
       if (p.family !== 'chart') {
@@ -535,7 +586,7 @@ export class Scene {
     // ---- crosshair + OHLC readout, over everything ----
     g.begin();
     if (ptr.in && ptr.x >= px && ptr.x <= px + pw && ptr.y >= py && ptr.y <= volBase) {
-      const i = Math.min(N - 1, Math.max(first, first + Math.floor((ptr.x - px) / step)));
+      const i = Math.min(end - 1, Math.max(first, first + Math.floor((ptr.x - px) / step)));
       g.rect(X(i), py, 1, volBase - py, withAlpha(t.text, 0.3));
       g.rect(px, ptr.y, pw, 1, withAlpha(t.text, 0.3));
       const y = r.y + HEADER + 2;

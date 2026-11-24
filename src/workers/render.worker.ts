@@ -90,12 +90,18 @@ function zoom(pane: ZoomPane, dir: 1 | -1 | 0): void {
   if (pane === 'candles') {
     const c = ZOOM.candles;
     settings.candlesVisible = dir === 0 ? c.def : Math.max(c.min, Math.min(c.max, Math.round(settings.candlesVisible * (dir < 0 ? 1.15 : 0.87))));
-    if (dir === 0) settings.candlesPriceScale = ZOOM.priceScale.def; // fit resets both axes
+    if (dir === 0) {
+      // fit resets both axes and scrolls back to live
+      settings.candlesPriceScale = ZOOM.priceScale.def;
+      settings.candlesOffset = 0;
+      settings.candlesPricePan = 0;
+    }
     dirty |= PANE_CANDLES;
   } else if (pane === 'depth') {
     const d = ZOOM.depthPct;
     // 0 = auto-fit; zooming starts from whatever range auto-fit is showing
     settings.depthRangePct = dir === 0 ? 0 : Math.max(d.min, Math.min(d.max, scene.depthPct * (dir < 0 ? 1.2 : 0.83)));
+    if (dir === 0) settings.depthShiftPct = 0;
     dirty |= PANE_DEPTH;
   } else {
     const r = ZOOM.rowPad;
@@ -111,19 +117,60 @@ function reportZoom(): void {
   postMessage(z);
 }
 
-/** Zoom one axis of the candle chart by `factor` (>1 = in); 0 resets that axis. */
-function candleScale(axis: 'x' | 'y', factor: number): void {
+/**
+ * Zoom one axis by `factor` (>1 = in); 0 resets it. 'x' / 'y' are the candle
+ * chart's time and price axes, 'depth' the depth chart's price axis.
+ */
+function axisScale(axis: 'x' | 'y' | 'depth', factor: number): void {
   if (axis === 'y') {
     const p = ZOOM.priceScale;
     settings.candlesPriceScale = factor === 0 ? p.def : Math.max(p.min, Math.min(p.max, (settings.candlesPriceScale ?? 1) * factor));
+    if (factor === 0) settings.candlesPricePan = 0;
     dirty |= PANE_CANDLES;
-    reportZoom();
+  } else if (axis === 'x') {
+    const c = ZOOM.candles;
+    settings.candlesVisible = factor === 0 ? c.def : Math.max(c.min, Math.min(c.max, settings.candlesVisible / factor));
+    if (factor === 0) settings.candlesOffset = 0;
+    dirty |= PANE_CANDLES;
+  } else {
+    const d = ZOOM.depthPct;
+    settings.depthRangePct = factor === 0 ? 0 : Math.max(d.min, Math.min(d.max, scene.depthPct / factor));
+    if (factor === 0) settings.depthShiftPct = 0;
+    dirty |= PANE_DEPTH;
+  }
+  reportZoom();
+}
+
+/**
+ * Wheel / trackpad scroll. A plain scroll pans (candles: time with dx, price
+ * with dy; depth: price with dx). A pinch, which browsers send as a wheel with
+ * ctrl held, zooms the pane under the pointer instead.
+ */
+function scroll(x: number, y: number, dx: number, dy: number, pinch: boolean): void {
+  const pane = scene.paneAt(x, y);
+  if (pinch) {
+    const f = Math.exp(-dy / 100); // pinch out (negative dy) zooms in
+    if (pane === PANE_CANDLES) axisScale('x', f);
+    else if (pane === PANE_DEPTH) axisScale('depth', f);
+    else if (pane === PANE_LADDER && Math.abs(dy) > 2) zoom('ladder', dy < 0 ? 1 : -1);
     return;
   }
-  const c = ZOOM.candles;
-  settings.candlesVisible = factor === 0 ? c.def : Math.max(c.min, Math.min(c.max, Math.round(settings.candlesVisible / factor)));
-  dirty |= PANE_CANDLES;
-  reportZoom();
+  if (pane === PANE_CANDLES) {
+    const m = scene.candleScroll();
+    if (!m) return;
+    const vis = Math.min(m.n, Math.round(settings.candlesVisible));
+    // scrolling right (dx > 0) moves towards the newest bar
+    const off = (settings.candlesOffset ?? 0) - dx / m.step;
+    settings.candlesOffset = Math.max(0, Math.min(Math.max(0, m.n - vis), off));
+    // scrolling down (dy > 0) moves the view to lower prices
+    settings.candlesPricePan = Math.max(-20, Math.min(20, (settings.candlesPricePan ?? 0) - dy / m.ph / 2));
+    dirty |= PANE_CANDLES;
+  } else if (pane === PANE_DEPTH) {
+    const pw = Math.max(1, scene.depth.w - 76);
+    const shift = (settings.depthShiftPct ?? 0) + (dx / pw) * 2 * scene.depthPct;
+    settings.depthShiftPct = Math.max(-20, Math.min(20, shift));
+    dirty |= PANE_DEPTH;
+  }
 }
 
 function stats(): void {
@@ -177,7 +224,11 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
         dirty |= PANE_CANDLES;
       };
       m.analyticsPort.onmessage = (ev) => {
-        analytics = ev.data as AnalyticsOut;
+        const next = ev.data as AnalyticsOut;
+        // scrolled back: keep the same bars in view as new ones arrive
+        const grew = analytics && next.symbol === analytics.symbol ? next.c.length - analytics.c.length : 0;
+        if (settings.candlesOffset && grew > 0 && grew < 5) settings.candlesOffset += grew;
+        analytics = next;
         dirty |= PANE_CANDLES;
       };
       requestAnimationFrame(frame);
@@ -224,20 +275,14 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
       dirty |= PANE_CANDLES;
       break;
     }
-    case 'wheel': {
-      const pane = scene.paneAt(m.x, m.y);
-      const dir = m.dy > 0 ? -1 : 1; // wheel down zooms out
-      if (pane === PANE_CANDLES && m.shift) candleScale('y', dir > 0 ? 1.15 : 1 / 1.15);
-      else if (pane === PANE_CANDLES) zoom('candles', dir);
-      else if (pane === PANE_DEPTH) zoom('depth', dir);
-      else if (pane === PANE_LADDER) zoom('ladder', dir);
+    case 'wheel':
+      scroll(m.x, m.y, m.dx, m.dy, m.pinch);
       break;
-    }
     case 'zoom':
       zoom(m.pane, m.dir);
       break;
-    case 'candleScale':
-      candleScale(m.axis, m.factor);
+    case 'axisScale':
+      axisScale(m.axis, m.factor);
       break;
     case 'layout':
       layoutPrefs = normalizeLayout(m.layout);
