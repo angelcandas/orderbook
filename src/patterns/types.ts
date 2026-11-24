@@ -1,3 +1,4 @@
+import type { IndOut } from '../indicators/spec';
 export type Bias = 1 | -1 | 0;
 
 export interface Pt { i: number; p: number } // candle index, price
@@ -33,9 +34,8 @@ export interface AnalyticsOut {
   l: Float64Array;
   c: Float64Array;
   v: Float64Array;
-  ema20: Float64Array;
-  ema50: Float64Array;
-  atr14: Float64Array;
+  /** the enabled indicators, computed over all candles */
+  ind: IndOut[];
   patterns: PatternHit[];
   computeMs: number;
 }

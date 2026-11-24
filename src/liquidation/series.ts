@@ -1,3 +1,4 @@
+import { binanceInterval } from '../shared/config';
 /**
  * Liquidation levels per candle: one column of the LiqMap per bar, so the
  * candle chart can draw where the estimated liquidations sat at every bar.
@@ -165,7 +166,7 @@ function shiftF32(a: Float32Array, k: number): void {
 
 /** Binance interval string for chart minutes, and the open-interest history period to pair with it. */
 export function periods(minutes: number): { kline: string; oi: string } {
-  const kline = minutes < 60 ? `${minutes}m` : `${minutes / 60}h`;
+  const kline = binanceInterval(minutes);
   const oi = minutes < 5 ? '5m' : kline; // OI history starts at 5m
   return { kline, oi };
 }

@@ -74,6 +74,9 @@ async function focus(base: string | null, interval: number): Promise<void> {
   series = null;
   port?.postMessage({ type: 'liqClear' });
   if (!base) { symbol = ''; status = 'no pair'; return; }
+  // columns are one per fixed-length bar; weeks and months don't line up with that, and
+  // open interest history stops at daily periods anyway
+  if (interval > 1440) { symbol = ''; status = 'daily candles or shorter only'; return; }
   symbol = futuresSymbol(`${base}USDT`).symbol;
   status = 'loading history';
   const s = new LiqSeries(interval * 60_000);

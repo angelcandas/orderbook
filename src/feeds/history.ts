@@ -119,7 +119,8 @@ export function prepend(list: Candle[], older: Candle[], max = MAX_BARS): Candle
   const first = list[0].t;
   const keep = older.filter((c) => c.t < first);
   if (!keep.length) return list;
-  if (step && first - keep[keep.length - 1].t > step) return list; // gap: don't stitch
+  // gap: don't stitch (1.5 steps of slack: months run 28 to 31 days)
+  if (step && first - keep[keep.length - 1].t > step * 1.5) return list;
   const out = keep.concat(list);
   return out.length > max ? out.slice(out.length - max) : out;
 }
