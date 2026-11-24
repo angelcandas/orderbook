@@ -85,3 +85,46 @@ export function loadChartPrefs(): ChartPrefs {
 export function saveChartPrefs(p: ChartPrefs): void {
   try { localStorage.setItem(CHART_KEY, JSON.stringify(p)); } catch { /* storage unavailable */ }
 }
+
+/** Page chrome the page remembers: theme mode, side panel open and its tab. */
+export type ThemeMode = 'system' | 'dark' | 'light';
+export type SideTab = 'alerts' | 'signals' | 'liq' | 'ind' | 'health';
+export const SIDE_TABS: SideTab[] = ['alerts', 'signals', 'liq', 'ind', 'health'];
+export interface UiPrefs { themeMode: ThemeMode; sideOpen: boolean; tab: SideTab }
+
+const UI_KEY = 'depthline.ui.v1';
+
+export function normalizeUiPrefs(p: any): UiPrefs {
+  return {
+    themeMode: p?.themeMode === 'dark' || p?.themeMode === 'light' ? p.themeMode : 'system',
+    sideOpen: bool(p?.sideOpen, true),
+    tab: SIDE_TABS.includes(p?.tab) ? p.tab : 'signals',
+  };
+}
+
+export function loadUiPrefs(): UiPrefs {
+  try {
+    const raw = localStorage.getItem(UI_KEY);
+    return normalizeUiPrefs(raw ? JSON.parse(raw) : {});
+  } catch {
+    return normalizeUiPrefs({});
+  }
+}
+
+export function saveUiPrefs(p: UiPrefs): void {
+  try { localStorage.setItem(UI_KEY, JSON.stringify(p)); } catch { /* storage unavailable */ }
+}
+
+/** Candle sizes shown as one-click buttons; the rest sit in the "more" menu. Keys 1-6 pick them. */
+export const PINNED_INTERVALS = [1, 5, 15, 60, 240, 1440];
+
+/** Group sizes offered in the book, as multiples of the tick. */
+export const GROUPS = [1, 10, 100, 1000];
+
+/** "0.1", "1", "10" ... for a group of `mult` ticks of `tick`; "10 ticks" when the tick is unknown. */
+export function groupLabel(mult: number, tick: number | undefined): string {
+  if (!(tick && tick > 0)) return mult === 1 ? 'tick' : `${mult} ticks`;
+  const step = mult * tick;
+  const dec = Math.max(0, Math.min(10, Math.ceil(-Math.log10(step) - 1e-9)));
+  return step.toFixed(dec);
+}

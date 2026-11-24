@@ -297,6 +297,26 @@ export class Gfx {
    */
   private digits = new Uint8Array(40);
   number(xRight: number, y: number, value: number, decimals: number, c: RGBA, sep = true): number {
+    const n = this.digitsOf(value, decimals, sep);
+    const d = this.digits;
+    const cw = this.atlas.cellW;
+    let x = xRight - n * cw;
+    const x0 = x;
+    for (let i = n - 1; i >= 0; i--) { this.glyph(x, y, d[i], c); x += cw; }
+    return xRight - x0;
+  }
+
+  /** The same number drawn from `x` to the right; returns its width. */
+  numberLeft(x: number, y: number, value: number, decimals: number, c: RGBA, sep = true): number {
+    const n = this.digitsOf(value, decimals, sep);
+    const d = this.digits;
+    const cw = this.atlas.cellW;
+    for (let i = n - 1, k = 0; i >= 0; i--, k++) this.glyph(x + k * cw, y, d[i], c);
+    return n * cw;
+  }
+
+  /** digits of `value`, least significant first, into this.digits; returns how many */
+  private digitsOf(value: number, decimals: number, sep: boolean): number {
     const d = this.digits;
     let n = 0;
     const neg = value < 0;
@@ -312,11 +332,7 @@ export class Gfx {
       pos++;
     } while (v > 0 && n < 38);
     if (neg) d[n++] = 45;
-    const cw = this.atlas.cellW;
-    let x = xRight - n * cw;
-    const x0 = x;
-    for (let i = n - 1; i >= 0; i--) { this.glyph(x, y, d[i], c); x += cw; }
-    return xRight - x0;
+    return n;
   }
 
   /**

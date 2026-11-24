@@ -33,6 +33,8 @@ export interface SceneSettings {
   pairLabel: string;
   /** candle size, e.g. "15m" or "1D", for the pane header */
   intervalLabel?: string;
+  /** candle size in minutes (43200 = calendar month), for the close countdown */
+  intervalMin?: number;
 }
 
 
@@ -96,6 +98,18 @@ export class Scene {
   /** liquidation levels, fed by the render worker */
   readonly liq = new LiqView();
   private subRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
+  /** mid of the last ladder frame and which way it last moved (+1 up, -1 down) */
+  private lastMid = NaN;
+  private midDir = 0;
+  /** the "back to live" button drawn when the candles are scrolled back (null: following live) */
+  liveBox: Rect | null = null;
+  /** the ladder flushed itself to draw its hover card over the text (the caller must not clear again) */
+  private ladderCleared = false;
+  /** column titles with the pair's units, rebuilt only when the pair changes */
+  private unitsFor = '';
+  private colPrice = 'PRICE';
+  private colSize = 'SIZE';
+  private colTotal = 'TOTAL';
 
   constructor(private g: Gfx) {}
 
@@ -116,8 +130,9 @@ export class Scene {
     let anim = false;
     if (dirty & PANE_LADDER) {
       g.begin();
-      anim = this.drawLadder(v, s, t, now);
-      g.end(t.bg, this.ladder);
+      this.ladderCleared = false;
+      anim = this.drawLadder(v, ptr, s, t, now);
+      g.end(t.bg, this.ladder, !this.ladderCleared);
     }
     if (dirty & PANE_DEPTH) {
       g.begin();
@@ -186,7 +201,7 @@ export class Scene {
   }
 
   // ---------------- ladder ----------------
-  private drawLadder(v: Float64Array, s: SceneSettings, t: Theme, now: number): boolean {
+  private drawLadder(v: Float64Array, ptr: { x: number; y: number; in: boolean }, s: SceneSettings, t: Theme, now: number): boolean {
     const g = this.g;
     const r = this.ladder;
     const ch = g.atlas.cellH;
@@ -208,12 +223,21 @@ export class Scene {
     const rowH = Math.round(ch + (s.ladderRowPad ?? 3));
     const top = r.y + HEADER + 4;
     const colTitles = top;
-    g.text(r.x + 8, colTitles, 'PRICE', t.dim);
-    g.textRight(r.x + r.w * 0.62, colTitles, 'SIZE', t.dim);
-    g.textRight(r.x + r.w - 8, colTitles, 'TOTAL', t.dim);
+    if (this.unitsFor !== s.pairLabel) {
+      // "PRICE USD  SIZE BTC  TOTAL BTC", as on exchange books; plain titles when the pair has no units
+      this.unitsFor = s.pairLabel;
+      const [base, quote] = s.pairLabel.split('/');
+      this.colPrice = quote ? `PRICE ${quote}` : 'PRICE';
+      this.colSize = base ? `SIZE ${base}` : 'SIZE';
+      this.colTotal = base ? `TOTAL ${base}` : 'TOTAL';
+    }
+    const wide = r.w > (this.colPrice.length + this.colSize.length + this.colTotal.length + 8) * cw;
+    g.text(r.x + 8, colTitles, wide ? this.colPrice : 'PRICE', t.dim);
+    g.textRight(r.x + r.w * 0.62, colTitles, wide ? this.colSize : 'SIZE', t.dim);
+    g.textRight(r.x + r.w - 8, colTitles, wide ? this.colTotal : 'TOTAL', t.dim);
     const bodyTop = colTitles + rowH + 2;
     // state strip at the bottom: spread, depth, imbalance
-    const stripH = rowH * 2 + 8;
+    const stripH = rowH * 3 + 8;
     const bodyH = r.y + r.h - bodyTop - stripH;
     const midRowH = rowH + 6;
     const rowsPerSide = Math.max(1, Math.min(LADDER, Math.floor((bodyH - midRowH) / 2 / rowH)));
@@ -251,6 +275,17 @@ export class Scene {
     const sizeX = r.x + r.w * 0.62;
     const totX = r.x + r.w - 8;
     const midY = bodyTop + rowsPerSide * rowH;
+    // walls: levels at least 3x the average visible size get a marker and a stronger size colour
+    let qSum = 0;
+    for (let i = 0; i < nA; i++) qSum += v[LAD_ASK + i * 3 + 1];
+    for (let i = 0; i < nB; i++) qSum += v[LAD_BID + i * 3 + 1];
+    const wall = nA + nB > 4 ? (qSum / (nA + nB)) * 3 : Infinity;
+    // hovered row: -(i+1) for asks, i+1 for bids, 0 for none
+    let hov = 0;
+    if (ptr.in && ptr.x >= r.x && ptr.x < r.x + r.w) {
+      if (ptr.y < midY && ptr.y >= midY - nA * rowH) hov = -(Math.floor((midY - ptr.y) / rowH) + 1);
+      else if (ptr.y >= midY + midRowH && ptr.y < midY + midRowH + nB * rowH) hov = Math.floor((ptr.y - midY - midRowH) / rowH) + 1;
+    }
     // asks: best ask sits just above the mid row
     for (let i = 0; i < nA; i++) {
       const y = midY - (i + 1) * rowH;
@@ -259,8 +294,12 @@ export class Scene {
       g.rect(r.x + r.w - bw, y, bw, rowH - 1, t.askBar);
       const fl = this.curFlash[i];
       if (!s.reducedMotion && now - fl < FLASH_MS) g.rect(r.x, y, r.w, rowH - 1, withAlpha(t.ask, 0.16 * (1 - (now - fl) / FLASH_MS)));
+      // hovered row and every row between it and the touch: the levels a market order would take
+      if (hov < 0 && i < -hov) g.rect(r.x, y, r.w, rowH - 1, withAlpha(t.text, i === -hov - 1 ? 0.1 : 0.04));
+      const isWall = v[o + 1] >= wall;
+      if (isWall) g.rect(r.x, y, 3, rowH - 1, t.ask);
       g.number(r.x + 8 + 12 * cw, y + 1, v[o], groupDecimals, t.ask);
-      g.number(sizeX, y + 1, v[o + 1], qd, t.text, false);
+      g.number(sizeX, y + 1, v[o + 1], qd, isWall ? t.warn : t.text, false);
       g.number(totX, y + 1, v[o + 2], qd, t.dim, false);
     }
     for (let i = 0; i < nB; i++) {
@@ -270,8 +309,11 @@ export class Scene {
       g.rect(r.x + r.w - bw, y, bw, rowH - 1, t.bidBar);
       const fl = this.curFlash[nA + i];
       if (!s.reducedMotion && now - fl < FLASH_MS) g.rect(r.x, y, r.w, rowH - 1, withAlpha(t.bid, 0.16 * (1 - (now - fl) / FLASH_MS)));
+      if (hov > 0 && i < hov) g.rect(r.x, y, r.w, rowH - 1, withAlpha(t.text, i === hov - 1 ? 0.1 : 0.04));
+      const isWall = v[o + 1] >= wall;
+      if (isWall) g.rect(r.x, y, 3, rowH - 1, t.bid);
       g.number(r.x + 8 + 12 * cw, y + 1, v[o], groupDecimals, t.bid);
-      g.number(sizeX, y + 1, v[o + 1], qd, t.text, false);
+      g.number(sizeX, y + 1, v[o + 1], qd, isWall ? t.warn : t.text, false);
       g.number(totX, y + 1, v[o + 2], qd, t.dim, false);
     }
     // mid row: last mid and spread
@@ -279,7 +321,15 @@ export class Scene {
     g.rect(r.x, midY, r.w, midRowH, t.panel);
     if (bb === bb && ba === ba) {
       const mid = (bb + ba) / 2;
-      g.number(r.x + 8 + 12 * cw, midY + 3, mid, pd + 1, t.text);
+      // the mid takes the colour and arrow of its last move, as an exchange's last price does
+      if (this.lastMid === this.lastMid && mid !== this.lastMid) this.midDir = mid > this.lastMid ? 1 : -1;
+      if (this.unitsFor !== s.pairLabel) this.midDir = 0;
+      this.lastMid = mid;
+      const mc = this.midDir > 0 ? t.bid : this.midDir < 0 ? t.ask : t.text;
+      g.number(r.x + 8 + 12 * cw, midY + 3, mid, pd + 1, mc);
+      const ax = r.x + 8 + 12 * cw + 6, ay = midY + 3 + ch / 2;
+      if (this.midDir > 0) g.tri(ax, ay + 3, ax + 8, ay + 3, ax + 4, ay - 3, mc);
+      else if (this.midDir < 0) g.tri(ax, ay - 3, ax + 8, ay - 3, ax + 4, ay + 3, mc);
       const spread = ba - bb;
       g.text(sizeX - 12 * cw, midY + 3, 'SPREAD', t.dim);
       g.number(totX, midY + 3, spread, pd, t.text, false);
@@ -301,6 +351,15 @@ export class Scene {
       g.number(r.x + 8 + 15 * cw, sy, bps, 2, t.text, false);
       g.text(r.x + r.w * 0.5, sy, 'IMB', t.dim);
       g.number(r.x + r.w - 8, sy, imb * 100, 1, imb >= 0 ? t.bid : t.ask, false);
+      // buy / sell share of the depth within 10 bps, labelled on the bar
+      const bPct = dB + dA > 0 ? (dB / (dB + dA)) * 100 : 50;
+      const yb = sy + rowH * 2 + 2;
+      g.text(r.x + 8, yb, 'B', t.bid);
+      g.number(r.x + 8 + 6 * cw, yb, bPct, 0, t.bid, false);
+      g.text(r.x + 8 + 6 * cw, yb, '%', t.bid);
+      g.text(r.x + r.w - 8 - cw, yb, 'S', t.ask);
+      g.number(r.x + r.w - 8 - 3 * cw, yb, 100 - bPct, 0, t.ask, false);
+      g.text(r.x + r.w - 8 - 3 * cw, yb, '%', t.ask);
       const y2 = sy + rowH;
       g.text(r.x + 8, y2, 'DEPTH 10BP', t.dim);
       g.number(r.x + r.w * 0.5 - 8, y2, dB, 2, t.bid);
@@ -310,6 +369,29 @@ export class Scene {
       const split = bw * (0.5 + imb / 2);
       g.rect(r.x + 8, y2 + rowH - 2, split, 3, t.bid);
       g.rect(r.x + 8 + split, y2 + rowH - 2, bw - split, 3, t.ask);
+    }
+    // hover: what filling from the touch to this row costs (average price, size, value)
+    if (hov !== 0) {
+      // own pass: text is drawn after shapes within a pass, so the card needs a fresh one to cover the rows
+      g.end(t.bg, r);
+      g.begin();
+      this.ladderCleared = true;
+      const k = Math.abs(hov), base = hov < 0 ? LAD_ASK : LAD_BID;
+      let q = 0, val = 0;
+      for (let i = 0; i < k; i++) { const qi = v[base + i * 3 + 1]; q += qi; val += qi * v[base + i * 3]; }
+      const rowY = hov < 0 ? midY - k * rowH : midY + midRowH + (k - 1) * rowH;
+      const tw = 24 * cw, th = ch * 3 + 10;
+      const tx = r.x + r.w - tw - 8;
+      const ty = Math.max(r.y + HEADER + 2, Math.min(r.y + r.h - th - 2, hov < 0 ? rowY - th - 2 : rowY + rowH + 2));
+      const col = hov < 0 ? t.ask : t.bid;
+      g.rect(tx, ty, tw, th, t.panel);
+      g.rect(tx, ty, 2, th, col);
+      g.text(tx + 8, ty + 4, 'AVG PX', t.dim);
+      g.number(tx + tw - 6, ty + 4, q > 0 ? val / q : 0, pd + 1, t.text);
+      g.text(tx + 8, ty + 6 + ch, 'SUM', t.dim);
+      g.number(tx + tw - 6, ty + 6 + ch, q, qd, col, false);
+      g.text(tx + 8, ty + 8 + ch * 2, 'VALUE', t.dim);
+      g.number(tx + tw - 6, ty + 8 + ch * 2, val, val >= 100 ? 0 : 2, t.text);
     }
     return anim;
   }
@@ -322,6 +404,20 @@ export class Scene {
     const bb = v[H.bestBid], ba = v[H.bestAsk];
     if (!(bb === bb && ba === ba)) return;
     const mid = (bb + ba) / 2;
+    {
+      // header readout: mid and spread in bps, so the depth pane stands on its own
+      const cw = g.atlas.cellW, hy = r.y + (HEADER - g.atlas.cellH) / 2;
+      let hx = r.x + 8 + 7 * cw;
+      if (r.w > 44 * cw + HEADER_CTRL_W) {
+        hx += g.text(hx, hy, 'MID', t.dim) + cw;
+        const midW = 14 * cw;
+        g.number(hx + midW, hy, mid, (v[H.priceDecimals] | 0) + 1, t.text);
+        hx += midW + 2 * cw;
+        hx += g.text(hx, hy, 'SPRD', t.dim) + cw;
+        g.number(hx + 6 * cw, hy, ((ba - bb) / mid) * 1e4, 2, t.text, false);
+        g.text(hx + 6 * cw + cw / 2, hy, 'BP', t.dim);
+      }
+    }
     const nb0 = v[H.nDepBid] | 0, na0 = v[H.nDepAsk] | 0;
     let pct = s.depthRangePct;
     if (!(pct > 0)) {
@@ -403,12 +499,20 @@ export class Scene {
       g.rect(ptr.x, py, 1, ph, withAlpha(t.text, 0.4));
       const ty = Y(cum);
       g.rect(px, ty, pw, 1, withAlpha(col, 0.5));
-      const bx = Math.min(ptr.x + 8, px + pw - 22 * g.atlas.cellW);
-      g.rect(bx, py + 4, 22 * g.atlas.cellW, g.atlas.cellH * 2 + 8, t.panel);
-      g.text(bx + 4, py + 6, 'PX', t.dim);
-      g.number(bx + 22 * g.atlas.cellW - 4, py + 6, p, v[H.priceDecimals] | 0, t.text);
-      g.text(bx + 4, py + 8 + g.atlas.cellH, 'CUM', t.dim);
-      g.number(bx + 22 * g.atlas.cellW - 4, py + 8 + g.atlas.cellH, cum, 4, col, false);
+      // price, cumulative size, its rough value and distance from the mid
+      const cw = g.atlas.cellW, ch = g.atlas.cellH, bwid = 24 * cw;
+      const bx = ptr.x + 12 + bwid < px + pw ? ptr.x + 12 : ptr.x - 12 - bwid;
+      g.rect(bx, py + 4, bwid, ch * 4 + 14, t.panel);
+      g.rect(bx, py + 4, 2, ch * 4 + 14, col);
+      g.text(bx + 8, py + 7, 'PRICE', t.dim);
+      g.number(bx + bwid - 6, py + 7, p, v[H.priceDecimals] | 0, t.text);
+      g.text(bx + 8, py + 9 + ch, 'SUM', t.dim);
+      g.number(bx + bwid - 6, py + 9 + ch, cum, 4, col, false);
+      g.text(bx + 8, py + 11 + ch * 2, 'VALUE', t.dim);
+      g.number(bx + bwid - 6, py + 11 + ch * 2, cum * p, 0, t.text);
+      g.text(bx + 8, py + 13 + ch * 3, 'FROM MID', t.dim);
+      g.text(bx + bwid - 6 - cw, py + 13 + ch * 3, '%', t.dim);
+      g.number(bx + bwid - 6 - cw, py + 13 + ch * 3, ((p - mid) / mid) * 100, 2, p >= mid ? t.ask : t.bid, false);
     }
   }
 
@@ -508,9 +612,18 @@ export class Scene {
     const bb = v[H.bestBid], ba = v[H.bestAsk];
     const m = (bb + ba) / 2;
     const showMid = bb === bb && ba === ba && m > lo && m < hi;
+    // the tag takes the colour of the forming candle, and the time left until it closes sits under it
+    const lastUp = a.c[N - 1] >= a.o[N - 1];
+    const tagCol = lastUp ? t.bid : t.ask;
     if (showMid) {
-      g.rect(r.x + r.w - axisW + 2, Y(m) - g.atlas.cellH / 2 - 1, axisW - 4, g.atlas.cellH + 2, t.accent);
-      g.number(r.x + r.w - 8, Y(m) - g.atlas.cellH / 2, m, pd, t.bg, false);
+      const ch = g.atlas.cellH;
+      g.rect(r.x + r.w - axisW + 2, Y(m) - ch / 2 - 1, axisW - 4, ch + 2, tagCol);
+      g.number(r.x + r.w - 8, Y(m) - ch / 2, m, pd, t.bg, false);
+      const left = closeIn(a.t[N - 1], s.intervalMin ?? 0, Date.now());
+      if (left > 0 && Y(m) + ch * 2 + 4 < py + ph) {
+        g.rect(r.x + r.w - axisW + 2, Y(m) + ch / 2 + 1, axisW - 4, ch + 2, withAlpha(tagCol, 0.75));
+        g.textRight(r.x + r.w - 8, Y(m) + ch / 2 + 2, countdown(left), t.bg);
+      }
     }
     g.rect(r.x, r.y, 1, r.h, t.grid);
     g.rect(r.x, r.y, r.w, 1, t.grid);
@@ -528,17 +641,17 @@ export class Scene {
     }
     drawPriceIndicators(g, ind, xm, Y, t);
     // live price line from the book
-    if (showMid) g.dashed(px, Y(m), px + pw, Y(m), 1, 3, withAlpha(t.accent, 0.7));
+    if (showMid) g.dashed(px, Y(m), px + pw, Y(m), 1, 3, withAlpha(tagCol, 0.7));
 
     // analysis window: patterns are only searched inside it
     const w = s.analysisWindow;
-    let labelTop = py + 2; // pattern labels stack from here: the window's top when one is drawn
+    let labelTop = py + g.atlas.cellH + 8; // pattern labels stack from here (under the legend), or from the window's top
     if (w) {
       const i0 = lowerBound(a.t, Math.min(w.t0, w.t1)), i1 = lowerBound(a.t, Math.max(w.t0, w.t1) + 1) - 1;
       const x0 = Math.max(px, X(i0) - step / 2), x1 = Math.min(px + pw, X(i1) + step / 2);
       const y0 = Math.max(py, Y(Math.max(w.p0, w.p1))), y1 = Math.min(py + ph, Y(Math.min(w.p0, w.p1)));
       if (x1 > x0 && y1 > y0) {
-        labelTop = y0 + 2;
+        labelTop = Math.max(labelTop, y0 + 2);
         g.rect(x0, y0, x1 - x0, y1 - y0, withAlpha(t.accent, 0.07));
         this.frame(x0, y0, x1, y1, withAlpha(t.accent, 0.8));
         const lbl = `WINDOW  ${a.patterns.length} PATTERN${a.patterns.length === 1 ? '' : 'S'}`;
@@ -612,27 +725,102 @@ export class Scene {
 
     g.end(t.bg, this.candlePlot, false);
 
-    // ---- crosshair + OHLC readout, over everything ----
+    // ---- crosshair, axis labels, legend and the back-to-live button, over everything ----
     g.begin();
+    const cw = g.atlas.cellW, ch = g.atlas.cellH;
     if (hover >= 0) {
       const i = hover;
-      g.rect(X(i), py, 1, bottom - py, withAlpha(t.text, 0.3));
-      g.rect(px, ptr.y, pw, 1, withAlpha(t.text, 0.3));
-      const y = r.y + HEADER + 2;
-      let x = r.x + r.w - axisW - 8 - 60 * g.atlas.cellW;
-      g.rect(x - 4, y - 1, 60 * g.atlas.cellW + 8, g.atlas.cellH + 2, t.panel);
+      const line = withAlpha(t.text, 0.3);
+      g.rect(X(i), py, 1, bottom - py, line);
+      g.rect(px, ptr.y, pw, 1, line);
+      const lab = withAlpha(t.text, 0.85);
+      // price under the pointer on the price axis
+      if (ptr.y >= py && ptr.y <= py + ph) {
+        g.rect(r.x + r.w - axisW + 2, ptr.y - ch / 2 - 1, axisW - 4, ch + 2, lab);
+        g.number(r.x + r.w - 8, ptr.y - ch / 2, hi - ((ptr.y - py) / ph) * (hi - lo), pd, t.bg, false);
+      }
+      // candle time on the time strip
+      const tl = timeLabel(a.t[i], s.intervalMin ?? 0);
+      const tw = tl.length * cw + 10;
+      const tx = Math.max(px, Math.min(px + pw - tw, X(i) - tw / 2));
+      g.rect(tx, timeY + 1, tw, CANDLE_TIME_H - 2, lab);
+      g.text(tx + 5, timeY + (CANDLE_TIME_H - ch) / 2, tl, t.bg);
+    }
+    // legend: O H L C, change from the previous close, volume; the hovered candle or the newest
+    {
+      const i = hover >= 0 ? hover : end - 1;
       const up = a.c[i] >= a.o[i] ? t.bid : t.ask;
-      const cw = g.atlas.cellW;
-      const fields = [a.o[i], a.h[i], a.l[i], a.c[i]];
+      const prev = i > 0 ? a.c[i - 1] : a.o[i];
+      const chg = a.c[i] - prev;
+      const y = py + 2;
+      const xEnd = px + pw - 4;
+      let x = px + 4;
+      // backing first, sized to what fits: the legend stays readable over candles
+      const est = (4 * (pd + 10) + 30) * cw;
+      g.rect(px, y - 2, Math.min(pw, est), ch + 4, withAlpha(t.bg, 0.8));
       const names = 'OHLC';
       for (let k = 0; k < 4; k++) {
+        const f = k === 0 ? a.o[i] : k === 1 ? a.h[i] : k === 2 ? a.l[i] : a.c[i];
+        if (x + (pd + 10) * cw > xEnd) break;
         g.glyph(x, y, names.charCodeAt(k), t.dim);
-        g.number(x + 14 * cw, y, fields[k], pd, up);
-        x += 15 * cw;
+        x += cw * 1.5;
+        x += g.numberLeft(x, y, f, pd, up) + cw * 1.5;
       }
+      if (x + 18 * cw < xEnd) {
+        if (chg >= 0) { g.glyph(x, y, 43, up); x += cw; }
+        x += g.numberLeft(x, y, chg, pd, up, false);
+        x += g.text(x, y, ' (', up);
+        if (chg >= 0) { g.glyph(x, y, 43, up); x += cw; }
+        x += g.numberLeft(x, y, prev ? (chg / prev) * 100 : 0, 2, up, false);
+        x += g.text(x, y, '%)', up) + cw * 1.5;
+      }
+      const vol = a.v[i];
+      if (vol === vol && x + 14 * cw < xEnd) {
+        g.glyph(x, y, 86, t.dim);
+        x += cw * 1.5;
+        g.numberLeft(x, y, vol, vol >= 1000 ? 0 : 2, t.dim);
+      }
+    }
+    // scrolled back into history: a button that returns to the newest candle
+    this.liveBox = null;
+    if (off > 0) {
+      const lbl = 'LIVE >>';
+      const bw2 = lbl.length * cw + 14, bh = ch + 8;
+      const bx = px + pw - bw2 - 6, by = py + ph - bh - 6;
+      g.rect(bx, by, bw2, bh, t.accent);
+      g.text(bx + 7, by + 4, lbl, t.bg);
+      this.liveBox = { x: bx, y: by, w: bw2, h: bh };
     }
     return true;
   }
 }
 
 export type { PatternHit };
+
+/** ms until the candle that opened at `open` closes; 0 when unknown. 43200 min is a calendar month. */
+export function closeIn(open: number, intervalMin: number, now: number): number {
+  if (!(intervalMin > 0) || !(open > 0)) return 0;
+  let close: number;
+  if (intervalMin === 43200) {
+    const d = new Date(open);
+    close = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  } else close = open + intervalMin * 60_000;
+  return Math.max(0, close - now);
+}
+
+const p2 = (n: number) => (n < 10 ? '0' : '') + n;
+/** "42", "03:12", "1:05:09" or "3d 04h" */
+export function countdown(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60;
+  if (d > 0) return `${d}d ${p2(h)}h`;
+  if (h > 0) return `${h}:${p2(m)}:${p2(x)}`;
+  return `${p2(m)}:${p2(x)}`;
+}
+
+/** crosshair time label: date and time for intraday candles, the date alone for daily and up */
+export function timeLabel(ms: number, intervalMin: number): string {
+  const d = new Date(ms);
+  const date = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  return intervalMin >= 1440 ? date : `${date} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
