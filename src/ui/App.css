@@ -90,6 +90,22 @@
   .shell .split.h:where(:not(.scope, .scope *)) { height: 8px; cursor: row-resize; }
   .shell .split:hover:where(:not(.scope, .scope *)), .shell .split:focus-visible:where(:not(.scope, .scope *)) { background: color-mix(in srgb, var(--accent) 35%, transparent); outline: none; }
   .shell .split.side:where(:not(.scope, .scope *)) { position: relative; flex: none; margin: 0 -4px; align-self: stretch; }
+  .shell main.sideleft:where(:not(.scope, .scope *)) { flex-direction: row-reverse; }
+  .shell main.sideleft aside:where(:not(.scope, .scope *)) { border-left: 0; border-right: 1px solid var(--line); }
+  .shell .zoom .grip:where(:not(.scope, .scope *)) { cursor: grab; touch-action: none; display: inline-flex; align-items: center; justify-content: center; padding: 0 4px; }
+  .shell .zoom .grip:active:where(:not(.scope, .scope *)) { cursor: grabbing; }
+  .shell .zoom button:disabled:where(:not(.scope, .scope *)) { opacity: 0.4; cursor: default; }
+  .shell .zoom button svg:where(:not(.scope, .scope *)) { display: block; }
+  .shell .zoom .zsep:where(:not(.scope, .scope *)) { width: 6px; }
+  .shell .droppreview:where(:not(.scope, .scope *)) { position: absolute; z-index: 6; pointer-events: none; display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--accent) 18%, transparent); border: 2px solid var(--accent); border-radius: 4px; }
+  .shell .droppreview span:where(:not(.scope, .scope *)) { padding: 4px 10px; border-radius: 12px; background: var(--raised); color: var(--text); font-size: 12px; box-shadow: var(--shadow-lg); }
+  .shell .layoutpop .check:where(:not(.scope, .scope *)) { align-items: center; gap: 6px; }
+  .shell .layoutpop .check kbd:where(:not(.scope, .scope *)) { margin-left: auto; }
+  .shell .layoutpop .presets:where(:not(.scope, .scope *)) { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+  .shell .layoutpop .presets button:where(:not(.scope, .scope *)) { text-align: left; }
+  .shell .layoutpop p:where(:not(.scope, .scope *)) { margin: 6px 0; line-height: 1.4; }
+  .shell .layoutpop p svg:where(:not(.scope, .scope *)) { vertical-align: -1px; }
 
   /* ---- side panel: tabs ---- */
 .shell aside:where(:not(.scope, .scope *)) { width: var(--side-w, 310px); display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--panel); min-height: 0; }
@@ -221,6 +237,8 @@
     .shell .toolbar:where(:not(.scope, .scope *)) { padding: 5px 10px; }
     .shell .tf button:where(:not(.scope, .scope *)), .shell .tg:where(:not(.scope, .scope *)), .shell .fav:where(:not(.scope, .scope *)) { min-height: 30px; }
     .shell main:where(:not(.scope, .scope *)) { flex-direction: column; overflow-y: auto; }
+    .shell main.sideleft:where(:not(.scope, .scope *)) { flex-direction: column; }
+    .shell main.sideleft aside:where(:not(.scope, .scope *)) { border-right: 0; }
     .shell .stage:where(:not(.scope, .scope *)) { flex: none; height: 78vh; }
     .shell .split.side:where(:not(.scope, .scope *)) { display: none; }
     .shell aside:where(:not(.scope, .scope *)) { width: auto; border-left: 0; border-top: 1px solid var(--line); }

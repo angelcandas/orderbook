@@ -42,7 +42,7 @@ const FLASH_MS = 400;
 export const PANE_LADDER = 1, PANE_DEPTH = 2, PANE_CANDLES = 4, PANE_ALL = 7;
 const HEADER = 22;
 /** px kept free at the right of each pane header for the zoom buttons drawn over it */
-export const HEADER_CTRL_W = 92;
+export const HEADER_CTRL_W = 140;
 /** candle chart price axis width and time strip height, css px (the page puts drag handles on them) */
 export const CANDLE_AXIS_W = 70, CANDLE_TIME_H = 18, PANE_HEADER = HEADER;
 /** px of the candle header taken by the page's indicators / window / explain buttons */
@@ -128,23 +128,29 @@ export class Scene {
   draw(v: Float64Array, a: AnalyticsOut | null, ptr: { x: number; y: number; in: boolean }, s: SceneSettings, t: Theme, now: number, dirty: number): boolean {
     const g = this.g;
     let anim = false;
-    if (dirty & PANE_LADDER) {
+    const has = (r: Rect) => r.w > 0 && r.h > 0; // hidden panes take no space and draw nothing
+    // a pane draws the edges it shares with its neighbours (none on the canvas border)
+    const edges = (r: Rect) => {
+      if (r.x > 0) g.rect(r.x, r.y, 1, r.h, t.grid);
+      if (r.y > 0) g.rect(r.x, r.y, r.w, 1, t.grid);
+    };
+    if (dirty & PANE_LADDER && has(this.ladder)) {
       g.begin();
       this.ladderCleared = false;
       anim = this.drawLadder(v, ptr, s, t, now);
+      edges(this.ladder);
       g.end(t.bg, this.ladder, !this.ladderCleared);
     }
-    if (dirty & PANE_DEPTH) {
+    if (dirty & PANE_DEPTH && has(this.depth)) {
       g.begin();
       this.drawDepth(v, ptr, s, t);
-      g.rect(this.depth.x, this.depth.y, 1, this.depth.h, t.grid);
+      edges(this.depth);
       g.end(t.bg, this.depth);
     }
-    if (dirty & PANE_CANDLES) {
+    if (dirty & PANE_CANDLES && has(this.candles)) {
       g.begin();
       const cleared = this.drawCandles(a, v, ptr, s, t);
-      g.rect(this.candles.x, this.candles.y, 1, this.candles.h, t.grid);
-      g.rect(this.candles.x, this.candles.y, this.candles.w, 1, t.grid);
+      edges(this.candles);
       g.end(t.bg, this.candles, !cleared);
     }
     return anim;
@@ -209,10 +215,16 @@ export class Scene {
     const status = STATUS_NAMES[v[H.status]] ?? '';
     const full = `${s.venueLabel} ${s.pairLabel}  ORDER BOOK`;
     // a narrow ladder drops the "ORDER BOOK" suffix so the title, status and zoom buttons fit
-    const fits = 16 + (full.length + status.length + 2) * cw + HEADER_CTRL_W <= r.w;
-    this.header(r, fits ? full : `${s.venueLabel} ${s.pairLabel}`, t);
-    const stColor = status === 'live' ? t.bid : status === 'error' ? t.ask : t.warn;
-    g.textRight(r.x + r.w - 8 - HEADER_CTRL_W, r.y + (HEADER - ch) / 2, status.toUpperCase(), stColor);
+    // a narrow ladder drops the suffix, then the status (the top bar shows it too), then the venue
+    const room = Math.floor((r.w - 16 - HEADER_CTRL_W) / cw);
+    const short = `${s.venueLabel} ${s.pairLabel}`;
+    const withStatus = (x: string) => x.length + status.length + 2 <= room;
+    const title = withStatus(full) ? full : withStatus(short) || short.length <= room ? short : s.pairLabel.length <= room ? s.pairLabel : '';
+    this.header(r, title, t);
+    if (withStatus(title) && title) {
+      const stColor = status === 'live' ? t.bid : status === 'error' ? t.ask : t.warn;
+      g.textRight(r.x + r.w - 8 - HEADER_CTRL_W, r.y + (HEADER - ch) / 2, status.toUpperCase(), stColor);
+    }
 
     const pd = Math.max(0, Math.min(10, v[H.priceDecimals] | 0));
     const gp = v[H.group];

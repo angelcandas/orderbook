@@ -88,7 +88,9 @@ async function main() {
 
   await page.click('button[aria-label^="Add BTC/USD to favourites"]');
   await page.focus('[aria-label="Resize side panel"]'); await k('ArrowLeft'); await k('ArrowLeft');
-  await page.focus('[aria-label="Resize order book"]'); await k('ArrowRight');
+  await page.focus('[aria-label^="Resize order book"]'); await k('ArrowRight');
+  const ladderShare = await page.evaluate(() => JSON.parse(localStorage.getItem('depthline.view.v1')!).layout.root.kids[0].size);
+  check('book resized from the keyboard', Math.abs(ladderShare - 0.28) > 0.005, ladderShare);
 
   // shift+drag a window over the candle plot, then explain it
   const box = await page.evaluate(() => { const s = document.querySelector('.stage')!.getBoundingClientRect(); return { x: s.x, y: s.y, w: s.width, h: s.height }; });
@@ -119,6 +121,25 @@ async function main() {
   await page.waitForTimeout(200);
   check('wheel over the charts does not scroll the page', (await page.evaluate(() => document.scrollingElement!.scrollTop)) === 0);
 
+  // panels: hide the depth chart, move the candles across the top, put the side panel on the left
+  await k('d');
+  check('D hides the depth chart', (await page.locator('[aria-label="Zoom depth chart"]').count()) === 0);
+  const grip = await page.locator('button[aria-label="Move candle chart"]').boundingBox();
+  await page.mouse.move(grip!.x + grip!.width / 2, grip!.y + grip!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.w / 2, box.y + 30, { steps: 4 });
+  await page.mouse.move(box.x + box.w / 2, box.y + 8, { steps: 4 });
+  check('drop preview shows while moving a panel', await page.locator('.droppreview').isVisible());
+  await page.mouse.up();
+  const zc = await page.locator('[aria-label="Zoom candle chart"]').boundingBox();
+  const zl = await page.locator('[aria-label="Zoom order book"]').boundingBox();
+  check('candles moved to the top, full width', !!zc && !!zl && zc.y < zl.y && Math.abs(zc.x + zc.width - (zl.x + zl.width)) < 2, { zc, zl });
+  await page.click('button[aria-label="Panels"]');
+  await page.selectOption('.layoutpop select', 'left');
+  await k('Escape');
+  check('side panel moves to the left', await page.evaluate(() => document.querySelector('aside')!.getBoundingClientRect().x < document.querySelector('.stage')!.getBoundingClientRect().x));
+  const layoutBefore = await page.evaluate(() => localStorage.getItem('depthline.view.v1'));
+
   await page.goto(base);
   await ready();
   const after = await page.evaluate(() => ({
@@ -132,11 +153,15 @@ async function main() {
     indicators: document.querySelectorAll('#panel-ind li').length,
     period: (document.querySelector('#panel-ind input[type=number]') as HTMLInputElement).value,
     favourites: [...document.querySelectorAll('.favs .fav')].map((b) => b.textContent),
-    layout: JSON.parse(localStorage.getItem('depthline.view.v1')!).layout.wide.ladder,
+    view: localStorage.getItem('depthline.view.v1'),
+    depthShown: document.querySelectorAll('[aria-label="Zoom depth chart"]').length,
+    sideLeft: document.querySelector('aside')!.getBoundingClientRect().x < document.querySelector('.stage')!.getBoundingClientRect().x,
   }));
   const want = { interval: '4h', theme: 'light', tab: 'Indicators', sideW: '350px', liq: 'false', patterns: 'false', alerts: 1, indicators: 4, period: '33', favourites: ['BTC/USD'] };
   for (const [key, v] of Object.entries(want)) check(`remembered after reload: ${key}`, JSON.stringify((after as any)[key]) === JSON.stringify(v), (after as any)[key]);
-  check('remembered after reload: split', Math.abs(after.layout - 0.3) < 1e-9, after.layout);
+  check('remembered after reload: panel layout and sizes', after.view === layoutBefore, after.view);
+  check('remembered after reload: depth chart hidden', after.depthShown === 0);
+  check('remembered after reload: side panel on the left', after.sideLeft);
   check('no page errors', errors.length === 0, errors);
 
   await browser.close();
