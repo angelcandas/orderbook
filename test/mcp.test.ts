@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { autoInterval, parseDate, parseInterval, parsePair, parsePeriod, summariseBook } from '../mcp/market';
-import { chartSvg, decimals, png } from '../mcp/chart';
-import { build } from '../mcp/server';
+import { chartSvg, decimals } from '../mcp/chart';
+import { build, renderNode } from '../mcp/server';
 import { synthHistory } from '../server/sim';
 import { MONTH } from '../src/shared/config';
 
@@ -55,7 +55,7 @@ describe('mcp input parsing', () => {
 
 describe('mcp chart', () => {
   const cs = synthHistory(100, 300, 3_600_000, 7).map((c, i) => ({ ...c, t: Date.UTC(2026, 9, 1) + i * 3_600_000 }));
-  it('draws candles, a pattern, a window and a forecast cone, and rasterises', () => {
+  it('draws candles, a pattern, a window and a forecast cone, and rasterises', async () => {
     const svg = chartSvg({
       title: 'T <&>', interval: 60, candles: cs, first: 50,
       patterns: [{ n: 1, id: 'x', kind: 'double-top', label: 'Double top', bias: -1, family: 'chart', start: 100, end: 140, pivots: [{ i: 100, p: cs[100].h }, { i: 120, p: cs[120].l }, { i: 140, p: cs[140].h }], lines: [[{ i: 100, p: cs[120].l }, { i: 140, p: cs[120].l }]], status: 'confirmed', target: cs[120].l * 0.98, score: 0.8 }],
@@ -66,7 +66,7 @@ describe('mcp chart', () => {
     expect(svg).toContain('#1 Double top');
     expect(svg).toContain('T &lt;&amp;&gt;');
     expect(svg).toContain('Forecast, 20 bars');
-    const img = png(svg);
+    const img = Buffer.from(await renderNode(svg), 'base64');
     expect([...img.subarray(1, 4)].map((c) => String.fromCharCode(c)).join('')).toBe('PNG');
   });
   it('shows prices with about five significant digits', () => {

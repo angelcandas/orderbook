@@ -19,7 +19,7 @@ export type Venue = 'binance' | 'kraken';
  * Endpoints: live exchanges by default. DEPTHLINE_ENDPOINTS=local (or
  * host:port) points everything at the repo's emulator (`npm run emulator`).
  */
-export function endpoints(env = process.env.DEPTHLINE_ENDPOINTS): Endpoints {
+export function endpoints(env = typeof process !== 'undefined' ? process.env?.DEPTHLINE_ENDPOINTS : undefined): Endpoints {
   if (!env || env === 'live') return LIVE;
   return localEndpoints(env === 'local' ? 'localhost:8787' : env);
 }

@@ -48,7 +48,7 @@ resubscribes only the books that change on the open sockets, with no reconnect.
 
 ## Ask Claude (MCP)
 
-`npm run mcp` starts an MCP server that lets Claude answer questions about the market with the app's own analysis: status, research forecasts, and candle charts (as images) for the last day, week, month or year, or with patterns marked between two dates. Set up for Claude Desktop, Claude Code and claude.ai in [docs/mcp.md](docs/mcp.md).
+`npm run mcp` starts an MCP server that lets Claude answer questions about the market with the app's own analysis: status, research forecasts, and candle charts (as images) for the last day, week, month or year, or with patterns marked between two dates. It is hosted at `https://orderbookmcp.aiwilltrade.com/mcp`: add that URL in claude.ai under Settings → Connectors → Add custom connector. Local setup for Claude Desktop and Claude Code is in [docs/mcp.md](docs/mcp.md).
 
 ## Deploy
 
