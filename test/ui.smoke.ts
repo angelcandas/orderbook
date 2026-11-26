@@ -2,7 +2,7 @@
  * Drives the built page in Chromium against the venue emulator and checks that
  * the shell's features work and that what it remembers survives a reload:
  * shortcuts, overlay toggles, alerts, indicators, favourites, panel resizing,
- * the analysis window, the explain dialog, and wheel panning without page scroll.
+ * the analysis window, the explain dialog, the trading game, and wheel panning without page scroll.
  *
  *   npm run build && npm run test:ui
  */
@@ -57,6 +57,16 @@ async function main() {
   await page.fill('input[aria-label^="Alert price"]', '1');
   await page.click('#panel-alerts form button[type=submit]');
   check('alert added', (await page.locator('#panel-alerts li').count()) === 1);
+
+  await page.click('#tab-game');
+  await page.click('#panel-game button[aria-pressed]:has-text("5 min")');
+  await page.click('#panel-game .primary');
+  check('game starts with a clock', /^\d+:\d\d$/.test((await page.textContent('#panel-game .clock .time')) ?? ''));
+  await page.fill('#panel-game input[aria-label="Order amount in dollars"]', '1000');
+  await page.click('#panel-game .btns .buy');
+  check('game buy fills', (await page.locator('#panel-game .trades li').count()) >= 1);
+  check('game cash drops by the order', (await page.textContent('#panel-game .side .small'))?.includes('9,000.00') ?? false, await page.textContent('#panel-game .side .small'));
+  check('game tab shows the clock', /\dm$/.test((await page.textContent('#tab-game .badge')) ?? ''));
 
   await page.click('#tab-ind');
   await page.selectOption('#panel-ind select[aria-label="Add indicator"]', { index: 2 });
