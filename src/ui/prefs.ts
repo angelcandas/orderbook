@@ -94,7 +94,7 @@ export function saveChartPrefs(p: ChartPrefs): void {
 export type ThemeMode = 'system' | 'dark' | 'light';
 export type SideTab = 'alerts' | 'signals' | 'forecast' | 'liq' | 'ind' | 'game' | 'health';
 export const SIDE_TABS: SideTab[] = ['alerts', 'signals', 'forecast', 'liq', 'ind', 'game', 'health'];
-export interface UiPrefs { themeMode: ThemeMode; sideOpen: boolean; tab: SideTab }
+export interface UiPrefs { themeMode: ThemeMode; sideOpen: boolean; tab: SideTab; sideLeft: boolean }
 
 const UI_KEY = 'depthline.ui.v1';
 
@@ -103,6 +103,7 @@ export function normalizeUiPrefs(p: any): UiPrefs {
     themeMode: p?.themeMode === 'dark' || p?.themeMode === 'light' ? p.themeMode : 'system',
     sideOpen: bool(p?.sideOpen, true),
     tab: SIDE_TABS.includes(p?.tab) ? p.tab : 'signals',
+    sideLeft: bool(p?.sideLeft, false),
   };
 }
 

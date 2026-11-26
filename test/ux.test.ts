@@ -36,8 +36,8 @@ describe('page prefs', () => {
     expect(groupLabel(10, undefined)).toBe('10 ticks');
   });
   it('repairs stored ui prefs', () => {
-    expect(normalizeUiPrefs(null)).toEqual({ themeMode: 'system', sideOpen: true, tab: 'signals' });
-    expect(normalizeUiPrefs({ themeMode: 'light', sideOpen: false, tab: 'health' })).toEqual({ themeMode: 'light', sideOpen: false, tab: 'health' });
+    expect(normalizeUiPrefs(null)).toEqual({ themeMode: 'system', sideOpen: true, tab: 'signals', sideLeft: false });
+    expect(normalizeUiPrefs({ themeMode: 'light', sideOpen: false, tab: 'health', sideLeft: 'x' })).toEqual({ themeMode: 'light', sideOpen: false, tab: 'health', sideLeft: false });
     expect(normalizeUiPrefs({ themeMode: 'pink', tab: 'nope' }).tab).toBe('signals');
   });
 });
