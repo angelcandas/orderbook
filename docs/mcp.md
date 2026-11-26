@@ -66,9 +66,15 @@ claude mcp add depthline -- npx tsx /full/path/to/orderbook/mcp/server.ts
 
 Add `--scope user` to have it in every project. `/mcp` inside Claude Code shows whether it connected.
 
-### claude.ai (web and mobile)
+### claude.ai (web and mobile): hosted
 
-claude.ai connects to remote servers over HTTPS, so run the server in HTTP mode and expose it:
+The server is hosted as a Cloudflare Worker at **https://orderbookmcp.aiwilltrade.com/mcp** (`mcp/worker.ts`, deployed with the site on every push to main). In claude.ai open **Settings → Connectors → Add custom connector**, name it Depthline and paste that URL. It needs no login and only serves public market data. Connectors added on claude.ai also show up in Claude Desktop and the mobile apps.
+
+The Worker renders charts with resvg's WebAssembly build and the bundled Inter font (`mcp/fonts`, SIL Open Font License). Run it locally with `npx wrangler dev -c mcp/wrangler.toml`.
+
+### claude.ai: your own copy
+
+To run it from your own computer instead, start the server in HTTP mode and expose it:
 
 ```sh
 npm run mcp -- --http 8790          # http://127.0.0.1:8790/mcp

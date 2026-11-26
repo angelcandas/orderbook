@@ -5,3 +5,4 @@ recordings/*.jsonl
 *.log
 .DS_Store
 bench/results/*.local.md
+.wrangler/

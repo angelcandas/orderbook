@@ -1,0 +1,18 @@
+# The hosted MCP server (mcp/worker.ts). Deployed by .github/workflows/deploy.yml:
+#   npx wrangler deploy -c mcp/wrangler.toml
+# Local run: npx wrangler dev -c mcp/wrangler.toml
+name = "depthline-mcp"
+main = "worker.ts"
+compatibility_date = "2026-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# custom domain: Cloudflare creates the DNS record and the certificate
+routes = [{ pattern = "orderbookmcp.aiwilltrade.com", custom_domain = true }]
+
+rules = [
+  { type = "Data", globs = ["**/*.ttf"], fallthrough = true },
+]
+
+[observability]
+enabled = true

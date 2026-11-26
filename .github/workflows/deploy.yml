@@ -91,3 +91,62 @@ jobs:
           else
             echo "::warning::https://$CUSTOM_DOMAIN is not reachable yet (DNS or certificate pending)"
           fi
+
+  mcp:
+    # the hosted MCP server (mcp/worker.ts) at https://orderbookmcp.aiwilltrade.com/mcp
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      MCP_URL: https://orderbookmcp.aiwilltrade.com/mcp
+    steps:
+      - name: Check Cloudflare secrets
+        id: creds
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set; skipping deploy"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.ok == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.creds.outputs.ok == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.creds.outputs.ok == 'true'
+        run: npm ci
+      - name: Deploy the Worker (creates the custom domain, its DNS record and certificate)
+        if: steps.creds.outputs.ok == 'true'
+        run: |
+          set -o pipefail
+          npx wrangler deploy -c mcp/wrangler.toml 2>&1 | tee deploy.log || {
+            if grep -qiE "authentication|permission|10000|unauthorized" deploy.log; then
+              echo "::error::The CLOUDFLARE_API_TOKEN needs 'Workers Scripts: Edit' (account) and 'Workers Routes: Edit' + 'DNS: Edit' on the aiwilltrade.com zone to deploy the MCP Worker"
+            fi
+            exit 1
+          }
+      - name: Check the live MCP endpoint
+        if: steps.creds.outputs.ok == 'true'
+        run: |
+          body='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+          for i in $(seq 1 18); do
+            r=$(curl -sS --max-time 20 -X POST "$MCP_URL" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d "$body") \
+              && echo "$r" | grep -q '"market_status"' && break
+            echo "Not answering yet (attempt $i): ${r:0:200}"
+            r=''
+            sleep 10
+          done
+          if [ -n "$r" ]; then echo "Live: $MCP_URL" >> "$GITHUB_STEP_SUMMARY"; echo "$r" | head -c 300
+          else echo "::warning::$MCP_URL not answering yet (DNS or certificate pending)"; fi
+      - name: Check a chart renders (CPU heavy; the Workers free plan allows 10 ms per request)
+        if: steps.creds.outputs.ok == 'true'
+        run: |
+          body='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"price_chart","arguments":{"pair":"BTC","period":"1w"}}}'
+          r=$(curl -sS --max-time 60 -X POST "$MCP_URL" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d "$body" || true)
+          if echo "$r" | grep -q '"image/png"'; then echo "Chart OK ($(echo -n "$r" | wc -c) bytes)"; echo "price_chart renders" >> "$GITHUB_STEP_SUMMARY"
+          else echo "::warning::price_chart did not return an image: ${r:0:300}"; fi

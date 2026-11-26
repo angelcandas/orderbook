@@ -1,9 +1,8 @@
 /**
  * Candle charts as SVG, rasterised to PNG for MCP image replies. Same colours
  * as the app's themes (src/render/theme.ts). Pure string building, so it runs
- * anywhere Node runs; `png()` uses resvg (a prebuilt binary, no system deps).
+ * anywhere; server.ts (native resvg) and worker.ts (resvg wasm) rasterise it.
  */
-import { Resvg } from '@resvg/resvg-js';
 import type { Candle } from '../src/patterns/candle';
 import type { PatternHit } from '../src/patterns/types';
 import { bollinger, ema } from '../src/patterns/indicators';
@@ -242,7 +241,7 @@ export function chartSvg(spec: ChartSpec): string {
       if (top === Infinity) { top = y(cs[p.end].h); ti = p.end; }
       const text = `#${p.n} ${p.label}${p.status === 'forming' ? ' (forming)' : p.status === 'failed' ? ' (failed)' : ''}`;
       const w = text.length * 6.6 + 10;
-      let lx = Math.min(plotR - w - 2, Math.max(L + 2, x(ti) - w / 2)), ly = Math.max(T + 2, top - 26);
+      let lx = Math.min(plotR - w - 2, Math.max(L + 2, x(ti) - w / 2)), ly = Math.max(T + 24, top - 26); // below the legend row
       while (placed.some(([px, py]) => Math.abs(px - lx) < w && Math.abs(py - ly) < 20)) ly += 20;
       placed.push([lx, ly]);
       out.push(`<rect x="${f1(lx)}" y="${f1(ly)}" width="${f1(w)}" height="18" rx="4" fill="${th.panel}" stroke="${col}" stroke-opacity="0.8"/>`);
@@ -292,10 +291,4 @@ export function chartSvg(spec: ChartSpec): string {
   out.push(`<text x="${W - 16}" y="48" font-size="11" fill="${th.dim}" text-anchor="end">Times in UTC · Depthline · not financial advice</text>`);
   out.push(`</svg>`);
   return out.join('\n');
-}
-
-/** PNG bytes for an SVG. */
-export function png(svg: string, scale = 1): Buffer {
-  const r = new Resvg(svg, { fitTo: { mode: 'zoom', value: scale }, font: { loadSystemFonts: true, defaultFontFamily: 'Arial' } });
-  return r.render().asPng();
 }
