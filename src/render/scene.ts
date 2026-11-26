@@ -691,6 +691,11 @@ export class Scene {
         // inside bars) stay in the list unless selected, to keep the chart readable
         if (p.bias === 0 && !sel) continue;
         if (p.family === 'volatility' && !sel) continue;
+        // indicator signals with a shape (divergence swings, swept liquidation bands) draw it
+        if (p.lines.length) {
+          const lc = sel ? t.accent : withAlpha(col, 0.6 * fade);
+          for (const [p0, p1] of p.lines) if (p1.i >= first) g.dashed(X(Math.max(first, p0.i)), Y(p0.p), X(p1.i), Y(p1.p), sel ? 2 : 1, 3, lc);
+        }
         // marker above/below the bar
         const i = p.end;
         const x = X(i);

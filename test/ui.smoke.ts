@@ -81,10 +81,22 @@ async function main() {
   check('analysis window drawn', (await page.locator('.wintools button', { hasText: 'clear' }).count()) === 1);
   await k('e');
   check('explain dialog opens', ((await page.textContent('#explain-title')) ?? '').includes('patterns'));
-  if (await page.locator('.explainer article').count()) {
-    await page.locator('.explainer article').first().click();
-    check('clicking an explained pattern selects it', (await page.locator('.explainer article.sel').count()) === 1);
+  check('the window is studied first', ((await page.locator('.explainer article.study h3').first().textContent()) ?? '') === 'Inside the window', await page.locator('.explainer article h3').first().textContent());
+  if (!(await page.locator('.explainer article:not(.study)').count())) {
+    // nothing inside this small window: explain the whole history instead
+    await page.locator('.explainer [aria-label="Close"]').click();
+    await page.locator('.wintools button', { hasText: 'clear' }).click();
+    await page.waitForTimeout(600);
+    await k('e');
   }
+  if (await page.locator('.explainer article:not(.study)').count()) {
+    await page.locator('.explainer article:not(.study)').first().click();
+    check('clicking an explained pattern selects it', (await page.locator('.explainer article.sel').count()) === 1);
+    check('the chart shows only the pattern\'s indicators', (await page.locator('.focusind').count()) === 1);
+    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/explain-focus.png` });
+    await page.locator('.explainer [aria-label="Close"]').click();
+    check('closing the explanation removes them', (await page.locator('.focusind').count()) === 0);
+  } else check('the window held a pattern to explain', false);
   await k('Escape');
   await k('/');
   check('pair search opens', await page.locator('.picker .pop input').isVisible());

@@ -1,5 +1,6 @@
 import type { Candle } from './candle';
-import { atr, ema } from './indicators';
+import { atr, bollinger, ema, macd, rsi, sma } from './indicators';
+import type { LiqCtx } from './liq';
 
 /** Struct-of-arrays view of candles plus the indicators every detector uses. */
 export interface Series {
@@ -14,6 +15,13 @@ export interface Series {
   avgRange: Float64Array;
   /** index of the last CLOSED candle */
   lastClosed: number;
+  /** inputs of the indicator signals (src/patterns/signals.ts): RSI 14, Bollinger 20 2, MACD 12 26 9, volume SMA 20 */
+  rsi14: Float64Array;
+  bbMid: Float64Array; bbUp: Float64Array; bbLo: Float64Array;
+  macdLine: Float64Array; macdHist: Float64Array;
+  volAvg: Float64Array;
+  /** estimated liquidations per candle, when the liquidation map is loaded */
+  liq: LiqCtx | null;
 }
 
 export function toSeries(cs: Candle[]): Series {
@@ -23,6 +31,8 @@ export function toSeries(cs: Candle[]): Series {
     t: new Float64Array(n), o: new Float64Array(n), h: new Float64Array(n), l: new Float64Array(n), c: new Float64Array(n), v: new Float64Array(n),
     atr: new Float64Array(n), ema20: new Float64Array(n), ema50: new Float64Array(n), avgBody: new Float64Array(n), avgRange: new Float64Array(n),
     lastClosed: n - 1,
+    rsi14: new Float64Array(0), bbMid: new Float64Array(0), bbUp: new Float64Array(0), bbLo: new Float64Array(0),
+    macdLine: new Float64Array(0), macdHist: new Float64Array(0), volAvg: new Float64Array(0), liq: null,
   };
   for (let i = 0; i < n; i++) {
     const k = cs[i];
@@ -32,6 +42,11 @@ export function toSeries(cs: Candle[]): Series {
   atr(s.h, s.l, s.c, 14, s.atr);
   ema(s.c, 20, s.ema20);
   ema(s.c, 50, s.ema50);
+  s.rsi14 = rsi(s.c, 14);
+  [s.bbMid, s.bbUp, s.bbLo] = bollinger(s.c, 20, 2);
+  const m = macd(s.c, 12, 26, 9);
+  s.macdLine = m[0]; s.macdHist = m[2];
+  s.volAvg = sma(s.v, 20);
   let bodySum = 0, rangeSum = 0;
   for (let i = 0; i < n; i++) {
     s.avgBody[i] = i ? bodySum / Math.min(i, 14) : Math.abs(s.c[0] - s.o[0]);
