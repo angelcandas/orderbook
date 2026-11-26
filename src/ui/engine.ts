@@ -8,7 +8,7 @@ import type { SceneSettings } from '../render/scene';
 import type { PatternHit } from '../patterns/types';
 import type { LayoutPrefs } from '../render/layout';
 import type { WindowPicked, ZoomPane, ZoomState } from '../workers/protocol';
-import type { AnalysisWindow } from '../patterns/window';
+import type { AnalysisWindow, WindowStudy } from '../patterns/window';
 import type { Outcome } from '../patterns/detect';
 import type { Forecast } from '../forecast/forecast';
 import type { LiqStats } from '../workers/liquidation.worker';
@@ -54,7 +54,7 @@ export interface Snapshot {
   patterns: {
     list: PatternHit[]; outcomes: Outcome[]; computeMs: number; candles: number; backfill: number; source: string;
     /** the window the list was searched in (null: all history); candle open times; last price */
-    window: AnalysisWindow | null; t: Float64Array; last: number; symbol: string;
+    window: AnalysisWindow | null; study: WindowStudy | null; t: Float64Array; last: number; symbol: string;
     /** 24 h ticker figures from the candles (null until history arrives) */
     day: { ref: number; hi: number; lo: number; vol: number; hours: number } | null;
     /** research forecast over the full history (null until enough closed candles) */
@@ -106,12 +106,13 @@ export class Engine {
     this.analytics = new Worker(new URL('../workers/analytics.worker.ts', import.meta.url), { type: 'module', name: 'analytics' });
     this.render = new Worker(new URL('../workers/render.worker.ts', import.meta.url), { type: 'module', name: 'render' });
     this.liq = new Worker(new URL('../workers/liquidation.worker.ts', import.meta.url), { type: 'module', name: 'liquidations' });
-    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, t: new Float64Array(0), last: NaN, symbol: '', day: null, forecast: null }, liq: null };
+    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, study: null, t: new Float64Array(0), last: NaN, symbol: '', day: null, forecast: null }, liq: null };
 
     const fr = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const fa = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const ar = new MessageChannel();
     const lr = new MessageChannel();
+    const la = new MessageChannel(); // liquidations -> analytics
     this.idx = { kraken: new MarketIndex(o.catalog.kraken), binance: new MarketIndex(o.catalog.binance) };
 
     for (const v of ['kraken', 'binance'] as Venue[]) {
@@ -130,14 +131,14 @@ export class Engine {
         renderPort: fr[v].port1, analyticsPort: fa[v].port1,
       }, [fr[v].port1, fa[v].port1]);
     }
-    this.analytics.postMessage({ type: 'init', renderPort: ar.port1, feedPorts: [fa.kraken.port2, fa.binance.port2] }, [ar.port1, fa.kraken.port2, fa.binance.port2]);
+    this.analytics.postMessage({ type: 'init', renderPort: ar.port1, feedPorts: [fa.kraken.port2, fa.binance.port2], liqPort: la.port2 }, [ar.port1, fa.kraken.port2, fa.binance.port2, la.port2]);
     if (o.indicators) this.analytics.postMessage({ type: 'indicators', list: o.indicators });
     if (o.horizon) this.analytics.postMessage({ type: 'horizon', horizon: o.horizon });
     this.analytics.onmessage = (e) => {
       if (e.data.type === 'patterns' && e.data.venue === this.o.venue) {
         this.snap.patterns = {
           list: e.data.patterns, outcomes: e.data.outcomes, computeMs: e.data.computeMs, candles: e.data.candles, backfill: e.data.backfill ?? 0, source: e.data.source ?? '',
-          window: e.data.window ?? null, t: e.data.t ?? new Float64Array(0), last: e.data.last ?? NaN, symbol: e.data.symbol ?? '',
+          window: e.data.window ?? null, study: e.data.study ?? null, t: e.data.t ?? new Float64Array(0), last: e.data.last ?? NaN, symbol: e.data.symbol ?? '',
           day: e.data.day ?? null, forecast: e.data.forecast ?? null,
         };
         this.onPatterns({ ...this.snap.patterns });
@@ -154,11 +155,11 @@ export class Engine {
     }, [off, fr.kraken.port2, fr.binance.port2, ar.port2, lr.port2]);
     this.liq.onmessage = (e) => { if (e.data.type === 'liqStats') this.snap.liq = e.data; };
     this.liq.postMessage({
-      type: 'init', renderPort: lr.port1,
+      type: 'init', renderPort: lr.port1, analyticsPort: la.port1,
       futuresWs: o.endpoints.futuresWs ?? 'wss://fstream.binance.com',
       futuresRest: o.endpoints.futuresRest ?? 'https://fapi.binance.com',
       spotRest: o.endpoints.binanceRest,
-    }, [lr.port1]);
+    }, [lr.port1, la.port1]);
     this.render.onmessage = (e) => {
       if (e.data.type === 'stats') this.snap.render = e.data;
       else if (e.data.type === 'selected') this.onSelected(e.data.id);

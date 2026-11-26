@@ -17,7 +17,7 @@ import { futuresSymbol } from '../liquidation/model';
 import { LiqSeries, periods, type Bar, type OiPoint } from '../liquidation/series';
 
 export type LiqCmd =
-  | { type: 'init'; futuresWs: string; futuresRest: string; spotRest: string; renderPort: MessagePort }
+  | { type: 'init'; futuresWs: string; futuresRest: string; spotRest: string; renderPort: MessagePort; analyticsPort?: MessagePort }
   | { type: 'focus'; base: string | null; interval: number }
   | { type: 'stop' };
 
@@ -40,7 +40,15 @@ export interface LiqStats {
 const OI_MS = 10_000;
 
 let wsBase = '', restBase = '', spotRest = '';
-let port: MessagePort | null = null;
+let renderPort: MessagePort | null = null;
+/** the analytics worker gets a copy of every frame and tail, for the liquidation signals */
+let analyticsPort: MessagePort | null = null;
+const port = {
+  postMessage(m: any, transfer: Transferable[] = []): void {
+    analyticsPort?.postMessage(m); // copied: the buffers go to the render worker below
+    renderPort?.postMessage(m, transfer);
+  },
+};
 let series: LiqSeries | null = null;
 let symbol = '';
 let status = 'idle';
@@ -56,7 +64,7 @@ let tailDirty = false;
 self.onmessage = (e: MessageEvent<LiqCmd>) => {
   const m = e.data;
   if (m.type === 'init') {
-    wsBase = m.futuresWs; restBase = m.futuresRest; spotRest = m.spotRest; port = m.renderPort;
+    wsBase = m.futuresWs; restBase = m.futuresRest; spotRest = m.spotRest; renderPort = m.renderPort; analyticsPort = m.analyticsPort ?? null;
     setInterval(() => { msgsPerSec = msgs; msgs = 0; postStats(); }, 1000);
   } else if (m.type === 'focus') focus(m.base, m.interval);
   else if (m.type === 'stop') { teardown(); close(); }
@@ -72,7 +80,7 @@ async function focus(base: string | null, interval: number): Promise<void> {
   teardown();
   const g = ++gen;
   series = null;
-  port?.postMessage({ type: 'liqClear' });
+  port.postMessage({ type: 'liqClear' });
   if (!base) { symbol = ''; status = 'no pair'; return; }
   // columns are one per fixed-length bar and open interest history stops at daily
   // periods, so weekly and monthly charts are built from daily columns: the
@@ -95,7 +103,7 @@ async function focus(base: string | null, interval: number): Promise<void> {
     source = 'volume estimate';
   }
   series = s;
-  if (s.cols.length) port?.postMessage(s.frame(symbol));
+  if (s.cols.length) port.postMessage(s.frame(symbol));
   connect(g);
   oiLive = source === 'open interest';
   timers.push(setInterval(() => pollOi(g), OI_MS));
@@ -104,7 +112,7 @@ async function focus(base: string | null, interval: number): Promise<void> {
     if (g !== gen || !series || !tailDirty || !series.cols.length) return;
     tailDirty = false;
     const t = series.tail();
-    port?.postMessage(t, [t.data.buffer, t.events.buffer]);
+    port.postMessage(t, [t.data.buffer, t.events.buffer]);
   }, 1000));
 }
 
@@ -153,8 +161,8 @@ function connect(g: number, attempt = 0): void {
     if (d.e === 'aggTrade') {
       const r = series.trade(+d.T, +d.p, +d.q);
       tailDirty = true;
-      if (r === 'full') port?.postMessage(series.frame(symbol));
-      else if (r === 'new') { const t = series.tail(); port?.postMessage(t, [t.data.buffer, t.events.buffer]); }
+      if (r === 'full') port.postMessage(series.frame(symbol));
+      else if (r === 'new') { const t = series.tail(); port.postMessage(t, [t.data.buffer, t.events.buffer]); }
     } else if (d.e === 'forceOrder') {
       const o = d.o;
       series.liquidation(+o.T || Date.now(), +(o.ap || o.p), +(o.z || o.q), o.S === 'SELL' ? 'long' : 'short');

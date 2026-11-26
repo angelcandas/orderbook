@@ -65,13 +65,14 @@ function finish(
 
 // ---------------- double / triple tops and bottoms, head and shoulders ----------------
 
-export function tops(s: Series, pv: Pivot[], out: PatternHit[]): void {
+/** `scale` shrinks the minimum height for smaller swings (1 = the usual 2 ATR pivots). */
+export function tops(s: Series, pv: Pivot[], out: PatternHit[], scale = 1): void {
   for (let k = 0; k + 2 < pv.length; k++) {
     const a = pv[k], m = pv[k + 1], b = pv[k + 2];
     const top = a.hi;
     const tol = tolerance(s, b.i);
     const height = top ? Math.max(a.p, b.p) - m.p : m.p - Math.min(a.p, b.p);
-    if (height < 2 * s.atr[b.i] || b.i - a.i < 5) continue;
+    if (height < 2 * scale * s.atr[b.i] || b.i - a.i < 5) continue;
 
     // triple: a m b m2 c
     if (k + 4 < pv.length) {
@@ -308,7 +309,7 @@ export function flags(s: Series, out: PatternHit[]): void {
 
 // ---------------- cup and handle ----------------
 
-export function cups(s: Series, pv: Pivot[], out: PatternHit[]): void {
+export function cups(s: Series, pv: Pivot[], out: PatternHit[], scale = 1): void {
   const highs = pv.filter((p) => p.hi);
   for (let x = 0; x + 1 < highs.length; x++) {
     const L = highs[x], R = highs[x + 1];
@@ -320,7 +321,7 @@ export function cups(s: Series, pv: Pivot[], out: PatternHit[]): void {
     let bi = L.i;
     for (let i = L.i; i <= R.i; i++) if (s.l[i] < s.l[bi]) bi = i;
     const depth = Math.min(L.p, R.p) - s.l[bi];
-    if (depth < 3 * s.atr[R.i]) continue;
+    if (depth < 3 * scale * s.atr[R.i]) continue;
     const pos = (bi - L.i) / span;
     if (pos < 0.25 || pos > 0.75) continue; // bottom roughly centred, not a V at one end
     // "not a V": the lowest third of the cup should last a while
