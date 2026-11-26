@@ -74,15 +74,17 @@ async function focus(base: string | null, interval: number): Promise<void> {
   series = null;
   port?.postMessage({ type: 'liqClear' });
   if (!base) { symbol = ''; status = 'no pair'; return; }
-  // columns are one per fixed-length bar; weeks and months don't line up with that, and
-  // open interest history stops at daily periods anyway
-  if (interval > 1440) { symbol = ''; status = 'daily candles or shorter only'; return; }
+  // columns are one per fixed-length bar and open interest history stops at daily
+  // periods, so weekly and monthly charts are built from daily columns: the
+  // chart draws each candle from the last daily column it covers
+  const days = interval > 1440;
+  if (days) interval = 1440;
   symbol = futuresSymbol(`${base}USDT`).symbol;
   status = 'loading history';
   const s = new LiqSeries(interval * 60_000);
   const t0 = performance.now();
   try {
-    const { bars, oi, src } = await history(symbol, interval);
+    const { bars, oi, src } = await history(symbol, interval, days ? 1500 : undefined);
     if (g !== gen) return;
     s.replay(bars, oi);
     source = src;
@@ -112,10 +114,11 @@ async function getJson(url: string): Promise<any> {
   return r.json();
 }
 
-async function history(sym: string, interval: number): Promise<{ bars: Bar[]; oi: OiPoint[]; src: LiqStats['source'] }> {
+async function history(sym: string, interval: number, bars?: number): Promise<{ bars: Bar[]; oi: OiPoint[]; src: LiqStats['source'] }> {
   const p = periods(interval);
   // 500 OI points is the endpoint's max; pick as many bars as it can cover
-  const limit = interval < 5 ? 1000 : 500;
+  // (weekly / monthly charts ask for more daily bars to fill more candles)
+  const limit = bars ?? (interval < 5 ? 1000 : 500);
   const toBars = (rows: any[]): Bar[] => rows.map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
   try {
     const [k, o] = await Promise.all([

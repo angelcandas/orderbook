@@ -177,3 +177,26 @@ describe('LiqSeries', () => {
     expect(periods(240)).toEqual({ kline: '4h', oi: '4h' });
   });
 });
+
+describe('liquidation columns on the candle chart', () => {
+  const DAY = 86_400_000;
+  it('maps each candle to its own column when steps match', async () => {
+    const { columnOf } = await import('../src/render/liq');
+    const t = [0, 1, 2, 3].map((d) => d * DAY);
+    expect([0, 1, 2, 3].map((i) => columnOf(t, i, 0, DAY, 4))).toEqual([0, 1, 2, 3]);
+    expect(columnOf(t, 0, 2 * DAY, DAY, 4)).toBe(-1); // before the history
+  });
+
+  it('draws weekly and monthly candles from the last daily column inside them', async () => {
+    const { columnOf, candleAt } = await import('../src/render/liq');
+    const weeks = [0, 7, 14, 21].map((d) => d * DAY);
+    // 25 daily columns from day 0: week 0 -> day 6, week 3 (still open) -> newest column
+    expect([0, 1, 2, 3].map((i) => columnOf(weeks, i, 0, DAY, 25))).toEqual([6, 13, 20, 24]);
+    const months = [0, 31, 59].map((d) => d * DAY);
+    expect(columnOf(months, 0, 0, DAY, 90)).toBe(30);
+    expect(columnOf(months, 1, 0, DAY, 90)).toBe(58);
+    // a liquidation on day 16 sits on the third weekly candle
+    expect(candleAt(weeks, 0, 4, 16 * DAY + 5)).toBe(2);
+    expect(candleAt(weeks, 1, 4, 3 * DAY)).toBe(-1);
+  });
+});

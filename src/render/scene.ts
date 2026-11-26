@@ -668,12 +668,23 @@ export class Scene {
       }
     }
 
-    // patterns
+    // patterns; with one selected, the others fade and the selected one is
+    // drawn last, over a band marking the bars it spans, even if its family is hidden
     let labelRow = 0;
-    for (const p of a.patterns) {
-      if (p.family === 'chart' ? !s.showChartPatterns : !s.showCandlePatterns) continue;
+    const selP = s.selectedPattern ? a.patterns.find((p) => p.id === s.selectedPattern) ?? null : null;
+    if (selP && selP.end >= first && selP.start < end) {
+      const x0 = Math.max(px, X(Math.max(first, selP.start)) - step / 2);
+      const x1 = Math.min(px + pw, X(Math.min(end - 1, Math.max(selP.end, selP.breakout?.i ?? 0))) + step / 2);
+      g.rect(x0, py, x1 - x0, ph, withAlpha(t.accent, 0.1));
+      g.rect(x0, py, 1, ph, withAlpha(t.accent, 0.5));
+      g.rect(x1 - 1, py, 1, ph, withAlpha(t.accent, 0.5));
+    }
+    const order = selP ? [...a.patterns.filter((p) => p !== selP), selP] : a.patterns;
+    for (const p of order) {
+      const sel = p === selP;
+      if (!sel && (p.family === 'chart' ? !s.showChartPatterns : !s.showCandlePatterns)) continue;
       if (p.end < first || p.start >= end) continue;
-      const sel = s.selectedPattern === p.id;
+      const fade = selP && !sel ? 0.3 : 1;
       const col = p.bias > 0 ? t.bull : p.bias < 0 ? t.bear : t.neutral;
       if (p.family !== 'chart') {
         // only directional signals get a marker; neutral ones (doji, NR4,
@@ -686,21 +697,42 @@ export class Scene {
         const below = p.bias > 0;
         const y = below ? Y(a.l[i]) + 6 : Y(a.h[i]) - 6;
         const d = below ? 6 : -6;
-        g.tri(x, y, x - 4, y + d, x + 4, y + d, sel ? t.accent : col);
-        if (sel || vis <= 120) {
+        if (sel) {
+          // every bar of the signal gets a marker, the last one larger
+          for (let j = Math.max(first, p.start); j < p.end; j++) {
+            const xj = X(j), yj = below ? Y(a.l[j]) + 6 : Y(a.h[j]) - 6;
+            g.tri(xj, yj, xj - 3, yj + d * 0.7, xj + 3, yj + d * 0.7, t.accent);
+          }
+          g.tri(x, y, x - 6, y + d * 1.5, x + 6, y + d * 1.5, t.accent);
+        } else g.tri(x, y, x - 4, y + d, x + 4, y + d, withAlpha(col, fade));
+        if (sel || (!selP && vis <= 120)) {
           const lbl = p.label;
-          const ly = below ? y + d + 2 : y + d - g.atlas.cellH - 2;
-          g.text(x - (lbl.length * g.atlas.cellW) / 2, ly, lbl, withAlpha(col, 0.9));
+          const dd = sel ? d * 1.5 : d;
+          const ly = below ? y + dd + 2 : y + dd - g.atlas.cellH - 2;
+          const lx = x - (lbl.length * g.atlas.cellW) / 2;
+          if (sel) {
+            g.rect(lx - 4, ly - 1, lbl.length * g.atlas.cellW + 8, g.atlas.cellH + 2, withAlpha(t.accent, 0.9));
+            g.text(lx, ly, lbl, t.bg);
+          } else g.text(lx, ly, lbl, withAlpha(col, 0.9 * fade));
         }
         continue;
       }
-      const alpha = sel ? 1 : p.status === 'failed' ? 0.35 : 0.8;
+      const alpha = (sel ? 1 : p.status === 'failed' ? 0.35 : 0.8) * fade;
       const c2 = withAlpha(col, alpha);
-      for (const [p0, p1] of p.lines) g.line(X(Math.max(first, p0.i)), Y(p0.p), X(p1.i), Y(p1.p), sel ? 2 : 1.5, c2);
+      for (const [p0, p1] of p.lines) g.line(X(Math.max(first, p0.i)), Y(p0.p), X(p1.i), Y(p1.p), sel ? 2.5 : 1.5, c2);
       for (let k = 1; k < p.pivots.length; k++) {
         const q0 = p.pivots[k - 1], q1 = p.pivots[k];
         if (q1.i < first) continue;
-        g.dashed(X(Math.max(first, q0.i)), Y(q0.p), X(q1.i), Y(q1.p), 1, 3, withAlpha(col, alpha * 0.6));
+        g.dashed(X(Math.max(first, q0.i)), Y(q0.p), X(q1.i), Y(q1.p), sel ? 1.5 : 1, 3, withAlpha(col, sel ? 0.9 : alpha * 0.6));
+      }
+      if (sel) {
+        // the pivots that define the pattern, as rings
+        for (const q of p.pivots) {
+          if (q.i < first || q.i >= end) continue;
+          const qx = X(q.i), qy = Y(q.p);
+          g.rect(qx - 4, qy - 4, 8, 8, t.accent);
+          g.rect(qx - 2, qy - 2, 4, 4, t.bg);
+        }
       }
       if (p.target !== undefined && (sel || p.status === 'confirmed')) {
         const ty = Y(p.target);
@@ -718,8 +750,8 @@ export class Scene {
       const lbl = `${p.label} ${p.status === 'confirmed' ? '+' : p.status === 'failed' ? 'x' : '~'}`;
       const ly = labelTop + (labelRow++ % 6) * (g.atlas.cellH + 3);
       const lw = lbl.length * g.atlas.cellW + 8;
-      g.rect(lx, ly, lw, g.atlas.cellH + 2, withAlpha(sel ? t.accent : col, sel ? 0.9 : 0.25));
-      g.text(lx + 4, ly + 1, lbl, sel ? t.bg : t.text);
+      g.rect(lx, ly, lw, g.atlas.cellH + 2, sel ? withAlpha(t.accent, 0.9) : withAlpha(col, 0.25 * fade));
+      g.text(lx + 4, ly + 1, lbl, sel ? t.bg : withAlpha(t.text, fade));
       this.patternBoxes.push({ id: p.id, x: lx, y: ly, w: lw, h: g.atlas.cellH + 2 });
     }
 

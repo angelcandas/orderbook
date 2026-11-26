@@ -61,11 +61,10 @@ export class LiqView {
     if (!this.ready || this.stepMs <= 0) return;
     const k = a.c[N - 1] / this.lastPrice;
     if (!(k > 0) || Math.abs(Math.log(k)) > 3) return;
-    // candle -> column
-    const colOf = (i: number) => {
-      const c = Math.round((a.t[i] - this.t0) / this.stepMs);
-      return c >= 0 && c < this.cols ? c : -1;
-    };
+    // candle -> column: the last column that opens inside the candle, so a
+    // weekly or monthly candle shows the levels as they stood at its close
+    // (columns are daily there); equal steps reduce to the candle's own column
+    const colOf = (i: number) => columnOf(a.t, i, this.t0, this.stepMs, this.cols);
     // display rows of at least 2 px, each the max over the bins it covers
     const binPx = (this.binStep * k * ph) / (hi - lo);
     const per = Math.max(1, Math.ceil(2 / Math.max(binPx, 1e-9)));
@@ -119,12 +118,12 @@ export class LiqView {
     if (ev.length) {
       let nmax = 0;
       for (let i = 2; i < ev.length; i += 4) if (ev[i] > nmax) nmax = ev[i];
-      const tFirst = a.t[first], tEnd = a.t[N - 1] + this.stepMs;
+      const tFirst = a.t[first], tEnd = a.t[N - 1] + (N > 1 ? a.t[N - 1] - a.t[N - 2] : this.stepMs);
       for (let i = 0; i < ev.length; i += 4) {
         const te = ev[i];
         if (te < tFirst || te >= tEnd) continue;
-        const idx = first + Math.floor((te - tFirst) / this.stepMs);
-        if (idx >= N) continue;
+        const idx = candleAt(a.t, first, N, te);
+        if (idx < 0) continue;
         const p = ev[i + 1] * k;
         if (p < lo || p > hi) continue;
         const s = 2 + 5 * Math.sqrt(ev[i + 2] / (nmax || 1));
@@ -162,6 +161,28 @@ export class LiqView {
     const step = this.binStep * k;
     return Math.max(0, Math.min(6, Math.ceil(-Math.log10(step))));
   }
+}
+
+/**
+ * The level column for candle i: the last column opening inside the candle
+ * (its span runs to the next candle's open), or -1 when none does.
+ */
+export function columnOf(t: ArrayLike<number>, i: number, t0: number, stepMs: number, cols: number): number {
+  const span = i + 1 < t.length ? t[i + 1] - t[i] : i > 0 ? t[i] - t[i - 1] : stepMs;
+  const c0 = Math.round((t[i] - t0) / stepMs);
+  const c = Math.min(cols - 1, Math.round((t[i] + span - t0) / stepMs) - 1);
+  return c >= 0 && c >= c0 ? c : -1;
+}
+
+/** Index of the candle in [first, N) whose open time is the last one <= t, or -1. */
+export function candleAt(t: ArrayLike<number>, first: number, N: number, x: number): number {
+  let lo = first, hi = N - 1;
+  if (hi < lo || x < t[lo]) return -1;
+  while (lo < hi) {
+    const m = (lo + hi + 1) >> 1;
+    if (t[m] <= x) lo = m; else hi = m - 1;
+  }
+  return lo;
 }
 
 let buf: Float32Array = new Float32Array(0);

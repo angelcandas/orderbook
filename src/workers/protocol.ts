@@ -80,6 +80,8 @@ export type RenderCmd =
   | { type: 'layout'; layout: LayoutPrefs }
   | { type: 'font'; px: number }
   | { type: 'settings'; settings: Partial<SceneSettings> }
+  /** select a pattern and scroll the candles so all of it is in view */
+  | { type: 'reveal'; id: string | null }
   | { type: 'theme'; theme: 'dark' | 'light' }
   | { type: 'resetStats' };
 

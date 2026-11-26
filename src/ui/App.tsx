@@ -190,7 +190,7 @@ const FeedOverlay = memo(function FeedOverlay({ venue, res, pair, other, onSwitc
 });
 
 const chartPatternsOf = (stats: Snapshot | null) =>
-  (stats?.patterns.list ?? []).filter((p: PatternHit) => p.family === 'chart').slice().sort((a, b) => statusOrder[a.status] - statusOrder[b.status] || b.end - a.end);
+  (stats?.patterns.list ?? []).filter((p: PatternHit) => p.family === 'chart').slice().sort((a, b) => b.end - a.end || statusOrder[a.status] - statusOrder[b.status]);
 
 function totalsOf(stats: Snapshot | null) {
   if (!stats) return null;
@@ -274,7 +274,7 @@ function SignalsPanel({ venue, win, selected, showChart, showCandle, onShowChart
         {candlePats.length === 0 && <p className="empty">No candle signals yet.</p>}
         <ul className="pats">
           {candlePats.map((p) => (
-            <li key={p.id}><button onClick={() => onSelect(p.id)}>
+            <li key={p.id} className={cx(selected === p.id && 'sel')}><button onClick={() => onSelect(p.id)} aria-pressed={selected === p.id}>
               <span className={cx('dot', p.bias > 0 && 'bull', p.bias < 0 && 'bear')}></span>
               <span className="name">{p.label}</span>
             </button></li>
@@ -590,8 +590,13 @@ export default function App() {
   function selectPattern(id: string) {
     const next = selected === id ? null : id;
     setSelected(next);
-    engineRef.current?.setSettings({ selectedPattern: next });
+    engineRef.current?.revealPattern(next);
   }
+
+  // a pattern picked on the chart scrolls its explanation into view
+  useEffect(() => {
+    if (explanation && selected) document.querySelector('.explainer.drawer article.sel')?.scrollIntoView({ block: 'nearest' });
+  }, [selected, explanation]);
 
   // ---- analysis window and explanation ----
   function clearWindow() { setWin(null); engineRef.current?.setWindow(null); }
@@ -1039,17 +1044,18 @@ export default function App() {
 
         {explanation && (
           <>
-            <div className="backdrop" onClick={() => setExplanation(null)}></div>
-            <div className="explainer" role="dialog" aria-modal="true" aria-labelledby="explain-title">
+            {/* no backdrop: the chart stays visible so a clicked pattern can be seen highlighted on it */}
+            <div className="explainer drawer" role="dialog" aria-modal="false" aria-labelledby="explain-title">
               <div className="ehead">
                 <h2 id="explain-title">{explanation.title}</h2>
                 <button className="ghost" onClick={copyExplanation}>{copied ? 'Copied' : 'Copy'}</button>
                 <button className="ghost icon" aria-label="Close" onClick={() => setExplanation(null)}><Icon name="close" /></button>
               </div>
               <p className="summary">{explanation.summary}</p>
+              {!!explanation.items.length && <p className="dim small">Newest first. Click a pattern to highlight its markers on the chart; click it again to clear.</p>}
               {explanation.items.map((it) => (
-                <article key={it.id} className={cx(selected === it.id && 'sel')}>
-                  <h3><button className="link" title="Show on the chart" onClick={() => selectPattern(it.id)}>{it.heading}</button></h3>
+                <article key={it.id} className={cx(selected === it.id && 'sel')} onClick={() => selectPattern(it.id)}>
+                  <h3><button className="link" title="Highlight on the chart" aria-pressed={selected === it.id} onClick={(e) => { e.stopPropagation(); selectPattern(it.id); }}>{it.heading}</button></h3>
                   <p>{it.text}</p>
                 </article>
               ))}

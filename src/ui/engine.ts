@@ -299,6 +299,8 @@ export class Engine {
     this.syncSymbols();
   }
   setSettings(s: Partial<SceneSettings>): void { this.render.postMessage({ type: 'settings', settings: s }); }
+  /** Select a pattern (null: none) and bring it into view on the candles. */
+  revealPattern(id: string | null): void { this.render.postMessage({ type: 'reveal', id }); }
   setTheme(t: 'dark' | 'light'): void { this.render.postMessage({ type: 'theme', theme: t }); }
   resize(w: number, h: number): void { this.render.postMessage({ type: 'resize', w, h, dpr: devicePixelRatio }); }
   pointer(x: number, y: number, inside: boolean): void { this.render.postMessage({ type: 'pointer', x, y, in: inside }); }
