@@ -10,7 +10,7 @@ import type { Resolved } from '../shared/pairs';
  */
 export type Ladder = ReturnType<Engine['ladder']>;
 
-function store<T>(initial: T) {
+export function store<T>(initial: T) {
   let value = initial;
   const subs = new Set<() => void>();
   const subscribe = (f: () => void) => { subs.add(f); return () => { subs.delete(f); }; };
@@ -30,3 +30,6 @@ export const useLadder = ladderStore.use;
 /** The focused book's feed state: 'live', 'syncing', 'error …', or 'not listed' when the venue lacks the pair. */
 export const focusStatusOf = (stats: Snapshot | null, venue: Venue, res: Resolved | null): string =>
   res ? stats?.feeds[venue]?.status[res.symbol] ?? 'connecting' : 'not listed';
+
+/** The trading game's clock for its tab badge ("12m", "40s"), null when no game runs. */
+export const gameBadgeStore = store<string | null>(null);

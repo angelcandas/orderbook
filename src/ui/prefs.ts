@@ -92,8 +92,8 @@ export function saveChartPrefs(p: ChartPrefs): void {
 
 /** Page chrome the page remembers: theme mode, side panel open and its tab. */
 export type ThemeMode = 'system' | 'dark' | 'light';
-export type SideTab = 'alerts' | 'signals' | 'forecast' | 'liq' | 'ind' | 'health';
-export const SIDE_TABS: SideTab[] = ['alerts', 'signals', 'forecast', 'liq', 'ind', 'health'];
+export type SideTab = 'alerts' | 'signals' | 'forecast' | 'liq' | 'ind' | 'game' | 'health';
+export const SIDE_TABS: SideTab[] = ['alerts', 'signals', 'forecast', 'liq', 'ind', 'game', 'health'];
 export interface UiPrefs { themeMode: ThemeMode; sideOpen: boolean; tab: SideTab }
 
 const UI_KEY = 'depthline.ui.v1';

@@ -1,6 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Ref } from 'react';
 import { Engine, type Snapshot } from './engine';
-import { focusStatusOf, ladderStore, statsStore, useLadder, useStats } from './live';
+import { focusStatusOf, gameBadgeStore, ladderStore, statsStore, useLadder, useStats } from './live';
 import { INTERVALS, LIVE, intervalLabel, isInterval, localEndpoints, type Interval, type Venue } from '../shared/config';
 import Indicators from './Indicators';
 import { MAX_SUB_PANES, SPECS, type IndConfig } from '../indicators/spec';
@@ -14,6 +14,7 @@ import type { PatternHit } from '../patterns/types';
 import type { AnalysisWindow } from '../patterns/window';
 import { explain, explanationText, type Explanation } from '../patterns/explain';
 import Alerts, { type AlertsHandle } from './Alerts';
+import Game from './Game';
 import { midOf } from '../alerts/alerts';
 import type { Resolved } from '../shared/pairs';
 import { HEADER_CTRL_W, CANDLE_AXIS_W, CANDLE_TIME_H, CANDLE_TOOLS_W, PANE_HEADER, DEPTH_AXIS_H, candleGeom } from '../render/scene';
@@ -49,7 +50,7 @@ const zoomTips: Record<ZoomPane, [string, string]> = {
   depth: ['Wider price range', 'Narrower price range'],
   candles: ['More candles', 'Fewer candles'],
 };
-const TABS: [SideTab, string, string][] = [['signals', 'Patterns', 'shapes'], ['forecast', 'Forecast', 'cone'], ['alerts', 'Alerts', 'bell'], ['liq', 'Liquidations', 'flame'], ['ind', 'Indicators', 'layers'], ['health', 'Health', 'pulse']];
+const TABS: [SideTab, string, string][] = [['signals', 'Patterns', 'shapes'], ['forecast', 'Forecast', 'cone'], ['alerts', 'Alerts', 'bell'], ['liq', 'Liquidations', 'flame'], ['ind', 'Indicators', 'layers'], ['game', 'Game', 'trophy'], ['health', 'Health', 'pulse']];
 const SHORTCUTS: [string[], string][] = [
   [['/', 'Ctrl K'], 'Search pairs'], [['1', '–', '6'], 'Candle size 1m, 5m, 15m, 1h, 4h, 1D'], [[',', '.'], 'Smaller / larger candle size'],
   [['V'], 'Switch venue'], [['F'], 'Fit every panel, back to live'], [['W'], 'Draw a pattern window'], [['E'], 'Explain the patterns'],
@@ -205,8 +206,16 @@ function totalsOf(stats: Snapshot | null) {
   };
 }
 
-/** Pattern count on the Patterns tab, a warning mark on Health when the feeds saw integrity problems. */
+/** Pattern count on the Patterns tab, the game clock on Game, a warning mark on Health when the feeds saw integrity problems. */
 function TabBadge({ id }: { id: SideTab }) {
+  if (id === 'game') return <GameBadge />;
+  return <StatsBadge id={id} />;
+}
+function GameBadge() {
+  const left = gameBadgeStore.use();
+  return left ? <span className="badge">{left}</span> : null;
+}
+function StatsBadge({ id }: { id: SideTab }) {
   const stats = useStats();
   if (id === 'signals') {
     const n = chartPatternsOf(stats).filter((p) => p.status !== 'failed').length;
@@ -1105,6 +1114,10 @@ export default function App() {
                 <h2>Indicators</h2>
                 <Indicators list={indicators} theme={theme} onchange={setIndicators} />
               </section>
+            </div>
+
+            <div className="panel" role="tabpanel" id="panel-game" aria-labelledby="tab-game" hidden={tab !== 'game'}>
+              <Game venue={venue} symbol={res?.symbol ?? null} label={pairText} base={res?.base ?? ''} quote={res?.quote ?? ''} />
             </div>
 
             <div className="panel" role="tabpanel" id="panel-health" aria-labelledby="tab-health" hidden={tab !== 'health'}>
