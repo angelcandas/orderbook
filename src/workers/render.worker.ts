@@ -145,6 +145,33 @@ function axisScale(axis: 'x' | 'y' | 'depth', factor: number): void {
 }
 
 /**
+ * Scroll (and if needed zoom out) the candles so the whole pattern sits in
+ * view with a few bars of context; leave the view alone if it already does.
+ */
+function reveal(id: string): void {
+  const a = analytics;
+  const p = a?.patterns.find((x) => x.id === id);
+  if (!a || !p) return;
+  const N = a.c.length;
+  const c = ZOOM.candles;
+  const lastBar = Math.max(p.end, p.breakout?.i ?? 0);
+  const need = lastBar - p.start + 1 + 6;
+  let zoomed = false;
+  if (need > settings.candlesVisible) { settings.candlesVisible = Math.min(c.max, need); zoomed = true; }
+  const vis = Math.max(Math.min(20, N), Math.min(N, Math.round(settings.candlesVisible)));
+  const end = N - Math.max(0, Math.min(N - vis, Math.round(settings.candlesOffset ?? 0)));
+  if (p.start < end - vis || lastBar >= end || zoomed) {
+    // centre the pattern; offset counts bars back from the newest
+    const mid = Math.round((p.start + lastBar) / 2);
+    const wantEnd = Math.min(N, mid + Math.ceil(vis / 2));
+    settings.candlesOffset = Math.max(0, Math.min(N - vis, N - wantEnd));
+    settings.candlesPricePan = 0;
+  }
+  if (zoomed) reportZoom();
+  dirty |= PANE_CANDLES;
+}
+
+/**
  * Wheel / trackpad scroll. A plain scroll pans (candles: time with dx, price
  * with dy; depth: price with dx). A pinch, which browsers send as a wheel with
  * ctrl held, zooms the pane under the pointer instead.
@@ -306,6 +333,11 @@ self.onmessage = (e: MessageEvent<RenderCmd>) => {
       break;
     case 'settings':
       Object.assign(settings, m.settings);
+      dirty = PANE_ALL;
+      break;
+    case 'reveal':
+      settings.selectedPattern = m.id;
+      if (m.id) reveal(m.id);
       dirty = PANE_ALL;
       break;
     case 'theme':

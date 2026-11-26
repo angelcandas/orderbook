@@ -144,6 +144,11 @@
 .shell .backdrop:where(:not(.scope, .scope *)) { position: fixed; inset: 0; background: rgb(0 0 0 / 0.45); z-index: 20; }
   .shell .explainer:where(:not(.scope, .scope *)) { position: fixed; z-index: 21; top: 8vh; left: 50%; transform: translateX(-50%); width: min(720px, calc(100vw - 32px)); max-height: 84vh; overflow: auto;
     background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 18px; box-shadow: var(--shadow-lg); }
+  /* the explanation sits at the left edge, over the order book, so the newest candles stay in view */
+  .shell .explainer.drawer:where(:not(.scope, .scope *)) { top: 64px; bottom: 12px; left: 12px; transform: none; width: min(420px, calc(100vw - 32px)); max-height: none; }
+  .shell .explainer.drawer article:where(:not(.scope, .scope *)) { cursor: pointer; border-radius: var(--r, 6px); padding: 6px 8px; margin: 0 -8px; }
+  .shell .explainer.drawer article:hover:where(:not(.scope, .scope *)) { background: var(--hover); }
+  .shell .explainer.drawer article.sel:where(:not(.scope, .scope *)) { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
   .shell .explainer.help:where(:not(.scope, .scope *)) { width: min(520px, calc(100vw - 32px)); }
   .shell .ehead:where(:not(.scope, .scope *)) { display: flex; gap: 8px; align-items: center; }
   .shell .ehead h2:where(:not(.scope, .scope *)) { flex: 1; margin: 0; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); }

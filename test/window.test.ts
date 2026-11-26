@@ -72,3 +72,11 @@ describe('analysis window', () => {
     expect(e.summary).toMatch(/No patterns were found over the loaded history/);
   });
 });
+
+describe('explanation order', () => {
+  it('lists the newest patterns first', () => {
+    const mk = (id: string, end: number) => ({ id, kind: 'bullish-engulfing', label: 'Bullish engulfing', bias: 1 as const, family: 'candle' as const, start: end - 1, end, pivots: [], lines: [], status: 'confirmed' as const, score: 1 });
+    const e = explain([mk('a', 3), mk('b', 9), mk('c', 6)], { t: Array.from({ length: 10 }, (_, i) => i * 60_000), last: 1, decimals: 2, window: null, symbol: 'X', interval: 1 });
+    expect(e.items.map((i) => i.id)).toEqual(['b', 'c', 'a']);
+  });
+});

@@ -81,7 +81,8 @@ export function explain(ps: PatternHit[], c: ExplainContext): Explanation {
   const dp = c.decimals;
   // neutral candle and volatility signals (doji, inside bars, NR4/NR7) are many and say little: counted, not listed
   const quiet = ps.filter((p) => p.family !== 'chart' && p.bias === 0);
-  const items = ps.filter((p) => !quiet.includes(p)).map((p) => {
+  // newest first, like the side panel
+  const items = ps.filter((p) => !quiet.includes(p)).sort((p, q) => q.end - p.end || q.start - p.start).map((p) => {
     const span = p.start === p.end ? `on the bar of ${when(c.t[p.end])}` : `from ${when(c.t[p.start])} to ${when(c.t[p.end])}`;
     const parts: string[] = [];
     parts.push(ABOUT[p.kind] ?? `${p.label}: no description yet.`);
@@ -132,7 +133,7 @@ export function explain(ps: PatternHit[], c: ExplainContext): Explanation {
     summary += ` Not listed below: ${list}. These mark indecision or compressed volatility rather than a direction; a move often follows when price leaves their range.`;
   }
   summary += ' These are mechanical detections, not advice.';
-  const iv = c.interval >= 1440 ? `${c.interval / 1440}d` : c.interval >= 60 ? `${c.interval / 60}h` : `${c.interval}m`;
+  const iv = c.interval === 10080 ? '1W' : c.interval === 43200 ? '1M' : c.interval >= 1440 ? `${c.interval / 1440}d` : c.interval >= 60 ? `${c.interval / 60}h` : `${c.interval}m`;
   return { title: `${c.symbol} ${iv} patterns`, summary, items };
 }
 

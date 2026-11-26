@@ -81,6 +81,10 @@ async function main() {
   check('analysis window drawn', (await page.locator('.wintools button', { hasText: 'clear' }).count()) === 1);
   await k('e');
   check('explain dialog opens', ((await page.textContent('#explain-title')) ?? '').includes('patterns'));
+  if (await page.locator('.explainer article').count()) {
+    await page.locator('.explainer article').first().click();
+    check('clicking an explained pattern selects it', (await page.locator('.explainer article.sel').count()) === 1);
+  }
   await k('Escape');
   await k('/');
   check('pair search opens', await page.locator('.picker .pop input').isVisible());
