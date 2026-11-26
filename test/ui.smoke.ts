@@ -2,7 +2,7 @@
  * Drives the built page in Chromium against the venue emulator and checks that
  * the shell's features work and that what it remembers survives a reload:
  * shortcuts, overlay toggles, alerts, indicators, favourites, panel resizing,
- * the analysis window, the explain dialog, and wheel panning without page scroll.
+ * the analysis window, the explain dialog, the trading game, and wheel panning without page scroll.
  *
  *   npm run build && npm run test:ui
  */
@@ -58,6 +58,16 @@ async function main() {
   await page.click('#panel-alerts form button[type=submit]');
   check('alert added', (await page.locator('#panel-alerts li').count()) === 1);
 
+  await page.click('#tab-game');
+  await page.click('#panel-game button[aria-pressed]:has-text("5 min")');
+  await page.click('#panel-game .primary');
+  check('game starts with a clock', /^\d+:\d\d$/.test((await page.textContent('#panel-game .clock .time')) ?? ''));
+  await page.fill('#panel-game input[aria-label="Order amount in dollars"]', '1000');
+  await page.click('#panel-game .btns .buy');
+  check('game buy fills', (await page.locator('#panel-game .trades li').count()) >= 1);
+  check('game cash drops by the order', (await page.textContent('#panel-game .side .small'))?.includes('9,000.00') ?? false, await page.textContent('#panel-game .side .small'));
+  check('game tab shows the clock', /\dm$/.test((await page.textContent('#tab-game .badge')) ?? ''));
+
   await page.click('#tab-ind');
   await page.selectOption('#panel-ind select[aria-label="Add indicator"]', { index: 2 });
   const period = page.locator('#panel-ind input[type=number]').first();
@@ -65,9 +75,22 @@ async function main() {
   await period.press('Enter');
   check('indicator added', (await page.locator('#panel-ind li').count()) === 4);
 
+  await page.click('#tab-forecast');
+  check('forecast says research only', /Research only, not financial advice/.test(await page.textContent('#panel-forecast') ?? ''));
+  const gotForecast = await page.waitForSelector('#panel-forecast .verdict', { timeout: 20_000 }).then(() => true, () => false);
+  check('forecast gives a top, a bottom and a probability', gotForecast && await page.evaluate(() => {
+    const t = document.querySelector('#panel-forecast')!.textContent ?? '';
+    return /Top/.test(t) && /Bottom/.test(t) && /\d+% chance higher/.test(t);
+  }), await page.textContent('#panel-forecast'));
+  await page.click('#panel-forecast .seg button:has-text("50")');
+  check('forecast horizon switches', (await page.textContent('#panel-forecast .seg button.on')) === '50');
+  await page.click('#tab-ind'); // the reload check below expects the Indicators tab
+
   await page.click('button[aria-label^="Add BTC/USD to favourites"]');
   await page.focus('[aria-label="Resize side panel"]'); await k('ArrowLeft'); await k('ArrowLeft');
-  await page.focus('[aria-label="Resize order book"]'); await k('ArrowRight');
+  await page.focus('[aria-label^="Resize order book"]'); await k('ArrowRight');
+  const ladderShare = await page.evaluate(() => JSON.parse(localStorage.getItem('depthline.view.v1')!).layout.root.kids[0].size);
+  check('book resized from the keyboard', Math.abs(ladderShare - 0.28) > 0.005, ladderShare);
 
   // shift+drag a window over the candle plot, then explain it
   const box = await page.evaluate(() => { const s = document.querySelector('.stage')!.getBoundingClientRect(); return { x: s.x, y: s.y, w: s.width, h: s.height }; });
@@ -110,6 +133,25 @@ async function main() {
   await page.waitForTimeout(200);
   check('wheel over the charts does not scroll the page', (await page.evaluate(() => document.scrollingElement!.scrollTop)) === 0);
 
+  // panels: hide the depth chart, move the candles across the top, put the side panel on the left
+  await k('d');
+  check('D hides the depth chart', (await page.locator('[aria-label="Zoom depth chart"]').count()) === 0);
+  const grip = await page.locator('button[aria-label="Move candle chart"]').boundingBox();
+  await page.mouse.move(grip!.x + grip!.width / 2, grip!.y + grip!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.w / 2, box.y + 30, { steps: 4 });
+  await page.mouse.move(box.x + box.w / 2, box.y + 8, { steps: 4 });
+  check('drop preview shows while moving a panel', await page.locator('.droppreview').isVisible());
+  await page.mouse.up();
+  const zc = await page.locator('[aria-label="Zoom candle chart"]').boundingBox();
+  const zl = await page.locator('[aria-label="Zoom order book"]').boundingBox();
+  check('candles moved to the top, full width', !!zc && !!zl && zc.y < zl.y && Math.abs(zc.x + zc.width - (zl.x + zl.width)) < 2, { zc, zl });
+  await page.click('button[aria-label="Panels"]');
+  await page.selectOption('.layoutpop select', 'left');
+  await k('Escape');
+  check('side panel moves to the left', await page.evaluate(() => document.querySelector('aside')!.getBoundingClientRect().x < document.querySelector('.stage')!.getBoundingClientRect().x));
+  const layoutBefore = await page.evaluate(() => localStorage.getItem('depthline.view.v1'));
+
   await page.goto(base);
   await ready();
   const after = await page.evaluate(() => ({
@@ -123,11 +165,15 @@ async function main() {
     indicators: document.querySelectorAll('#panel-ind li').length,
     period: (document.querySelector('#panel-ind input[type=number]') as HTMLInputElement).value,
     favourites: [...document.querySelectorAll('.favs .fav')].map((b) => b.textContent),
-    layout: JSON.parse(localStorage.getItem('depthline.view.v1')!).layout.wide.ladder,
+    view: localStorage.getItem('depthline.view.v1'),
+    depthShown: document.querySelectorAll('[aria-label="Zoom depth chart"]').length,
+    sideLeft: document.querySelector('aside')!.getBoundingClientRect().x < document.querySelector('.stage')!.getBoundingClientRect().x,
   }));
   const want = { interval: '4h', theme: 'light', tab: 'Indicators', sideW: '350px', liq: 'false', patterns: 'false', alerts: 1, indicators: 4, period: '33', favourites: ['BTC/USD'] };
   for (const [key, v] of Object.entries(want)) check(`remembered after reload: ${key}`, JSON.stringify((after as any)[key]) === JSON.stringify(v), (after as any)[key]);
-  check('remembered after reload: split', Math.abs(after.layout - 0.3) < 1e-9, after.layout);
+  check('remembered after reload: panel layout and sizes', after.view === layoutBefore, after.view);
+  check('remembered after reload: depth chart hidden', after.depthShown === 0);
+  check('remembered after reload: side panel on the left', after.sideLeft);
   check('no page errors', errors.length === 0, errors);
 
   await browser.close();

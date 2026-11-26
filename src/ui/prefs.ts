@@ -1,3 +1,4 @@
+import { DEFAULT_HORIZON, HORIZONS } from '../forecast/forecast';
 import { normalizeLayout, ZOOM, type LayoutPrefs } from '../render/layout';
 import { isInterval, type Interval } from '../shared/config';
 import { normalizeIndicators, type IndConfig } from '../indicators/spec';
@@ -58,6 +59,8 @@ export interface ChartPrefs {
   showChartPatterns: boolean;
   showCandlePatterns: boolean;
   showLiquidations: boolean;
+  /** candles ahead the research forecast looks */
+  forecastHorizon: number;
 }
 
 const CHART_KEY = 'depthline.chart.v1';
@@ -70,6 +73,7 @@ export function normalizeChartPrefs(p: any): ChartPrefs {
     showChartPatterns: bool(p?.showChartPatterns, true),
     showCandlePatterns: bool(p?.showCandlePatterns, true),
     showLiquidations: bool(p?.showLiquidations, true),
+    forecastHorizon: (HORIZONS as readonly number[]).includes(p?.forecastHorizon) ? p.forecastHorizon : DEFAULT_HORIZON,
   };
 }
 
@@ -88,9 +92,9 @@ export function saveChartPrefs(p: ChartPrefs): void {
 
 /** Page chrome the page remembers: theme mode, side panel open and its tab. */
 export type ThemeMode = 'system' | 'dark' | 'light';
-export type SideTab = 'alerts' | 'signals' | 'liq' | 'ind' | 'health';
-export const SIDE_TABS: SideTab[] = ['alerts', 'signals', 'liq', 'ind', 'health'];
-export interface UiPrefs { themeMode: ThemeMode; sideOpen: boolean; tab: SideTab }
+export type SideTab = 'alerts' | 'signals' | 'forecast' | 'liq' | 'ind' | 'game' | 'health';
+export const SIDE_TABS: SideTab[] = ['alerts', 'signals', 'forecast', 'liq', 'ind', 'game', 'health'];
+export interface UiPrefs { themeMode: ThemeMode; sideOpen: boolean; tab: SideTab; sideLeft: boolean }
 
 const UI_KEY = 'depthline.ui.v1';
 
@@ -99,6 +103,7 @@ export function normalizeUiPrefs(p: any): UiPrefs {
     themeMode: p?.themeMode === 'dark' || p?.themeMode === 'light' ? p.themeMode : 'system',
     sideOpen: bool(p?.sideOpen, true),
     tab: SIDE_TABS.includes(p?.tab) ? p.tab : 'signals',
+    sideLeft: bool(p?.sideLeft, false),
   };
 }
 

@@ -13,7 +13,8 @@
     "replay": "tsx server/replay.ts",
     "bench": "tsx bench/run.ts",
     "test:feeds": "tsx test/feeds.integration.ts",
-    "test:ui": "tsx test/ui.smoke.ts"
+    "test:ui": "tsx test/ui.smoke.ts",
+    "mcp": "tsx mcp/server.ts"
   },
   "license": "MIT",
   "devDependencies": {
@@ -32,7 +33,10 @@
   "type": "module",
   "private": true,
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@resvg/resvg-js": "^2.6.2",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "zod": "^3.25.76"
   }
 }

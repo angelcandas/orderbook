@@ -1,6 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Ref } from 'react';
 import { Engine, type Snapshot } from './engine';
-import { focusStatusOf, ladderStore, statsStore, useLadder, useStats } from './live';
+import { focusStatusOf, gameBadgeStore, ladderStore, statsStore, useLadder, useStats } from './live';
 import { INTERVALS, LIVE, intervalLabel, isInterval, localEndpoints, type Interval, type Venue } from '../shared/config';
 import Indicators from './Indicators';
 import { indLabel, MAX_SUB_PANES, SPECS, type IndConfig } from '../indicators/spec';
@@ -15,15 +15,20 @@ import type { AnalysisWindow } from '../patterns/window';
 import { explain, explanationText, type Explanation } from '../patterns/explain';
 import { indicatorsFor, needsOf } from '../patterns/needs';
 import Alerts, { type AlertsHandle } from './Alerts';
+import Game from './Game';
 import { midOf } from '../alerts/alerts';
 import type { Resolved } from '../shared/pairs';
 import { HEADER_CTRL_W, CANDLE_AXIS_W, CANDLE_TIME_H, CANDLE_TOOLS_W, PANE_HEADER, DEPTH_AXIS_H, candleGeom } from '../render/scene';
-import { computeLayout, dragSplit, DEFAULT_LAYOUT, ZOOM, type LayoutPrefs, type Rect } from '../render/layout';
+import {
+  computeLayout, dragSplitter, evenSplitter, setPaneHidden, movePane, dropSide, dropPreview, applyPreset, PRESETS, PANE_IDS, ZOOM,
+  type LayoutPrefs, type Rect, type Splitter, type PaneId, type DropSide,
+} from '../render/layout';
 import type { ZoomPane } from '../workers/protocol';
 import {
   loadPrefs, savePrefs, defaultPrefs, loadChartPrefs, saveChartPrefs, SIDE_W, type ViewPrefs,
   loadUiPrefs, saveUiPrefs, PINNED_INTERVALS, GROUPS, groupLabel, type ThemeMode, type SideTab, type UiPrefs, type ChartPrefs,
 } from './prefs';
+import { HORIZONS, MIN_SAMPLES, hasNoEdge, withLiquidity, type Verdict } from '../forecast/forecast';
 import Icon from './Icon';
 import { useToasts, toast, dismissToast } from './toast';
 import { useLatest, useLive } from './hooks';
@@ -44,16 +49,18 @@ const signed = (v: number, d: number) => (!Number.isFinite(v) ? '–' : `${v >= 
 
 const PANES: ZoomPane[] = ['ladder', 'depth', 'candles'];
 const paneNames: Record<ZoomPane, string> = { ladder: 'order book', depth: 'depth chart', candles: 'candle chart' };
+const paneTitle: Record<PaneId, string> = { ladder: 'Order book', depth: 'Depth chart', candles: 'Candle chart' };
 const zoomTips: Record<ZoomPane, [string, string]> = {
   ladder: ['Shorter rows, more price levels', 'Taller rows, fewer price levels'],
   depth: ['Wider price range', 'Narrower price range'],
   candles: ['More candles', 'Fewer candles'],
 };
-const TABS: [SideTab, string, string][] = [['signals', 'Patterns', 'shapes'], ['alerts', 'Alerts', 'bell'], ['liq', 'Liquidations', 'flame'], ['ind', 'Indicators', 'layers'], ['health', 'Health', 'pulse']];
+const TABS: [SideTab, string, string][] = [['signals', 'Patterns', 'shapes'], ['forecast', 'Forecast', 'cone'], ['alerts', 'Alerts', 'bell'], ['liq', 'Liquidations', 'flame'], ['ind', 'Indicators', 'layers'], ['game', 'Game', 'trophy'], ['health', 'Health', 'pulse']];
 const SHORTCUTS: [string[], string][] = [
   [['/', 'Ctrl K'], 'Search pairs'], [['1', '–', '6'], 'Candle size 1m, 5m, 15m, 1h, 4h, 1D'], [[',', '.'], 'Smaller / larger candle size'],
   [['V'], 'Switch venue'], [['F'], 'Fit every panel, back to live'], [['W'], 'Draw a pattern window'], [['E'], 'Explain the patterns'],
   [['I'], 'Indicators'], [['P'], 'Chart patterns on / off'], [['L'], 'Liquidation levels on / off'], [['B'], 'Side panel'],
+  [['O'], 'Order book on / off'], [['D'], 'Depth chart on / off'], [['C'], 'Candle chart on / off'],
   [['T'], 'Theme: system, dark, light'], [['?'], 'This list'], [['Esc'], 'Close'],
 ];
 const statusOrder = { forming: 0, confirmed: 1, failed: 2 } as const;
@@ -205,8 +212,16 @@ function totalsOf(stats: Snapshot | null) {
   };
 }
 
-/** Pattern count on the Patterns tab, a warning mark on Health when the feeds saw integrity problems. */
+/** Pattern count on the Patterns tab, the game clock on Game, a warning mark on Health when the feeds saw integrity problems. */
 function TabBadge({ id }: { id: SideTab }) {
+  if (id === 'game') return <GameBadge />;
+  return <StatsBadge id={id} />;
+}
+function GameBadge() {
+  const left = gameBadgeStore.use();
+  return left ? <span className="badge">{left}</span> : null;
+}
+function StatsBadge({ id }: { id: SideTab }) {
   const stats = useStats();
   if (id === 'signals') {
     const n = chartPatternsOf(stats).filter((p) => p.status !== 'failed').length;
@@ -298,6 +313,70 @@ function SignalsPanel({ venue, win, selected, showChart, showCandle, onShowChart
           {' '}{int(stats.patterns.backfill)} older bars were backfilled over REST{venue === 'kraken' && <>{' '}({stats.patterns.source === 'kraken' ? "Kraken's own" : stats.patterns.source === 'kraken+binance' ? "Kraken's latest 720, older from Binance rescaled to Kraken's price" : "from Binance, rescaled to Kraken's price"})</>}.</>}</p>
       </section>
     </>
+  );
+}
+
+const VERDICT: Record<Verdict, string> = { buy: 'Buy lean', sell: 'Sell lean', wait: 'Wait' };
+const pctOf = (x: number) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : '–');
+
+/** Research forecast: top, bottom, chance of closing higher and buy / sell flags, with how it did in this history. */
+function ForecastPanel({ horizon, interval, onHorizon }: { horizon: number; interval: Interval; onHorizon: (h: number) => void }) {
+  const stats = useStats();
+  const base = stats?.patterns.forecast ?? null;
+  const liq = stats?.liq;
+  const f = useMemo(() => {
+    if (!base) return null;
+    // cluster prices are the USDT perpetual's; rescale to this chart's price
+    const scale = liq?.lastPrice && base.last ? base.last / liq.lastPrice : 1;
+    return liq && (liq.long || liq.short) && scale > 0.2 && scale < 5 ? withLiquidity(base, liq.long, liq.short, scale) : base;
+  }, [base, liq?.long?.price, liq?.long?.notional, liq?.short?.price, liq?.short?.notional, liq?.lastPrice]);
+  const span = `${horizon} × ${intervalLabel(interval)} candles`;
+  return (
+    <section className="forecast">
+      <p className="research" role="note"><b>Research only, not financial advice.</b> A statistical sketch from past candles. Markets can and do move outside it.</p>
+      <h2>Market forecast
+        <span className="seg" role="group" aria-label="Forecast horizon">
+          {HORIZONS.map((h) => <button key={h} className={cx(h === horizon && 'on')} aria-pressed={h === horizon} onClick={() => onHorizon(h)}>{h}</button>)}
+        </span>
+      </h2>
+      {!f ? <p className="empty">Needs about {MIN_SAMPLES + 60 + horizon} closed candles of history. Waiting for the backfill, or pick a shorter horizon.</p> : (
+        <>
+          <p className="dim small">Where the close may be {span} from now (last close {px(f.last)}).</p>
+          <div className={cx('verdict', f.verdict)}>
+            <span className="v">{VERDICT[f.verdict]}</span>
+            <span className="p mono">{pctOf(f.pUp)} <small>chance higher</small></span>
+          </div>
+          <div className="cards">
+            <div className="card"><span className="k">Top (90th pct.)</span><span className="v mono up">{px(f.top)}</span><span className="s mono">{signed((f.top / f.last - 1) * 100, 1)}%</span></div>
+            <div className="card"><span className="k">Bottom (10th pct.)</span><span className="v mono down">{px(f.bottom)}</span><span className="s mono">{signed((f.bottom / f.last - 1) * 100, 1)}%</span></div>
+            <div className="card"><span className="k">Median</span><span className="v mono">{px(f.mid)}</span><span className="s mono">{signed((f.mid / f.last - 1) * 100, 1)}%</span></div>
+            <div className="card"><span className="k">Up / down room</span><span className="v mono">{Number.isFinite(f.reward) ? fmt(f.reward, 2) : '∞'}<small>×</small></span><span className="s mono">top ÷ bottom</span></div>
+          </div>
+          <ul className="flags" aria-label="Flags">
+            {f.flags.map((g) => <li key={g.id} className={g.tone}>{g.label}</li>)}
+          </ul>
+          <h3>What it is built from</h3>
+          <ul className="factors">
+            {f.factors.map((k) => (
+              <li key={k.key}>
+                <span className="name">{k.label}{!k.tested && <sup title="Live only: not part of the backtest">*</sup>}</span>
+                <span className="bar" aria-hidden="true"><i className={cx(k.score > 0 ? 'bull' : 'bear')} style={{ width: `${Math.abs(k.score) * 50}%`, [k.score > 0 ? 'left' : 'right']: '50%' }} /></span>
+                <span className="note dim">{k.note}</span>
+              </li>
+            ))}
+          </ul>
+          <h3>How it did in this history</h3>
+          <dl className="mono">
+            <dt>Candles learned from</dt><dd>{int(f.backtest.samples)}</dd>
+            <dt>Closed higher (any candle)</dt><dd>{pctOf(f.backtest.baseUp)}</dd>
+            <dt>Inside the range, out of sample</dt><dd>{pctOf(f.backtest.coverage)} <span className="dim">(aim 80%)</span></dd>
+            <dt>Direction right, out of sample</dt><dd className={cx(hasNoEdge(f) ? 'warnt' : 'up')}>{pctOf(f.backtest.hitRate)} <span className="dim">of {int(f.backtest.hitSamples)}</span></dd>
+            <dt>Always guessing {f.backtest.baseUp >= 0.5 ? 'up' : 'down'}</dt><dd>{pctOf(f.backtest.naiveRate)}</dd>
+          </dl>
+          <p className="dim small">Trend (EMA 20/50), momentum (MACD), RSI 14 and Bollinger 20,2 are scored from −1 to +1 and averaged. The chance higher is how often past candles with a similar score closed higher {horizon} candles later. Top and bottom are the 10th and 90th percentile of those moves, scaled to today's volatility. Patterns and liquidation clusters (*) nudge the chance by at most a few points: they have no history to test here. Backtest: learned on the first half of the history, scored on the second. There is no buy or sell lean unless the model called direction better than always guessing the usual direction; otherwise it says so. A buy lean then needs at least 58% and more room up than down; a sell lean the reverse.</p>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -414,6 +493,10 @@ export default function App() {
   const [sysTheme, setSysTheme] = useState<'dark' | 'light'>(() => (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
   const theme: 'dark' | 'light' = themeMode === 'system' ? sysTheme : themeMode;
   const [sideOpen, setSideOpen] = useState(init.ui.sideOpen);
+  const [sideLeft, setSideLeft] = useState(init.ui.sideLeft);
+  const [layoutOpen, setLayoutOpen] = useState(false);
+  // a pane being dragged to a new place: where the pointer is, and where it would land
+  const [moving, setMoving] = useState<{ id: PaneId; target: PaneId | null; side: DropSide; preview: Rect } | null>(null);
   const [tab, setTab] = useState<SideTab>(init.ui.tab);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -435,6 +518,7 @@ export default function App() {
   }, [explanation, selected]);
   const shownInd = useMemo(() => (focus ? indicatorsFor(focus) : indicators), [focus, indicators]);
   const shownLiq = focus && needsOf(focus).liq ? true : showLiq;
+  const [horizon, setHorizonState] = useState(init.chart.forecastHorizon);
   // lower panes and the volume strip change the candle pane's geometry (the axis handles follow it)
   const indPanes = useMemo(() => ({
     sub: Math.min(MAX_SUB_PANES, shownInd.filter((c) => c.on && SPECS[c.kind].pane === 'sub').length),
@@ -464,8 +548,8 @@ export default function App() {
   const [generation, setGeneration] = useState(0); // a new engine and canvas: a canvas can only be transferred once
 
   // ---- persistence: each takes the values just changed, the rest come from this render ----
-  const persistUi = (o: Partial<UiPrefs> = {}) => saveUiPrefs({ themeMode, sideOpen, tab, ...o });
-  const persistChart = (o: Partial<ChartPrefs> = {}) => saveChartPrefs({ interval, indicators, showChartPatterns: showChart, showCandlePatterns: showCandle, showLiquidations: showLiq, ...o });
+  const persistUi = (o: Partial<UiPrefs> = {}) => saveUiPrefs({ themeMode, sideOpen, tab, sideLeft, ...o });
+  const persistChart = (o: Partial<ChartPrefs> = {}) => saveChartPrefs({ interval, indicators, showChartPatterns: showChart, showCandlePatterns: showCandle, showLiquidations: showLiq, forecastHorizon: horizon, ...o });
   const persist = useCallback(() => savePrefs({ layout: layoutRef.current, sideW: sideWRef.current, fontPx: fontRef.current, ...zoomRef.current } satisfies ViewPrefs), [layoutRef, sideWRef, fontRef, zoomRef]);
   function syncUrl(o: Partial<{ source: string; venue: Venue; pair: string; group: number; interval: Interval; load: number; themeMode: ThemeMode; showLiq: boolean }> = {}) {
     const s = { source, venue, pair, group, interval, load, themeMode, showLiq, ...o };
@@ -483,6 +567,7 @@ export default function App() {
     toast(`Theme: ${m === 'system' ? `system (${sysTheme})` : m}`);
   }
   function toggleSide() { setSideOpen(!sideOpen); persistUi({ sideOpen: !sideOpen }); }
+  function setSideSide(left: boolean) { setSideLeft(left); persistUi({ sideLeft: left }); }
   const openHealth = () => openTab('health');
   function openTab(t: SideTab) { setTab(t); setSideOpen(true); persistUi({ tab: t, sideOpen: true }); }
   function setIndicators(list: IndConfig[]) {
@@ -491,10 +576,11 @@ export default function App() {
   }
   function setShowChartTo(v: boolean) { setShowChart(v); engineRef.current?.setSettings({ showChartPatterns: v }); persistChart({ showChartPatterns: v }); }
   function setShowCandleTo(v: boolean) { setShowCandle(v); engineRef.current?.setSettings({ showCandlePatterns: v }); persistChart({ showCandlePatterns: v }); }
+  function setHorizon(h: number) { setHorizonState(h); engineRef.current?.setHorizon(h); persistChart({ forecastHorizon: h }); }
   function setShowLiqTo(v: boolean) { setShowLiq(v); engineRef.current?.setSettings({ showLiquidations: v }); syncUrl({ showLiq: v }); persistChart({ showLiquidations: v }); }
 
   // ---- the engine: workers, shared buffers and the canvas, started once per generation ----
-  const latest = useLatest({ source, host, load, venue, pair, catalogRef, group, interval, theme, layoutRef, fontRef, zoomRef, indicators, reducedMotion, showChart, showCandle, selected, showLiq, res });
+  const latest = useLatest({ source, host, load, venue, pair, catalogRef, group, interval, theme, layoutRef, fontRef, zoomRef, indicators, horizon, reducedMotion, showChart, showCandle, selected, showLiq, res });
   const settings = (): SceneSettings => {
     const s = latest.current;
     const z = s.zoomRef.current;
@@ -516,7 +602,7 @@ export default function App() {
       pairCount: s.load,
       depth: { kraken: s.source === 'local' ? 1000 : 500, binance: 1000 },
       venue: s.venue, pair: s.pair, catalog: s.catalogRef.current, group: s.group, interval: s.interval, settings: settings(), theme: s.theme,
-      layout: s.layoutRef.current, fontPx: s.fontRef.current, indicators: s.indicators,
+      layout: s.layoutRef.current, fontPx: s.fontRef.current, indicators: s.indicators, horizon: s.horizon,
     });
     engineRef.current = engine;
     engine.onZoom = (z) => {
@@ -652,6 +738,7 @@ export default function App() {
     if (e.key === 'Escape') {
       if (helpOpen) setHelpOpen(false);
       else if (settingsOpen) setSettingsOpen(false);
+      else if (layoutOpen) setLayoutOpen(false);
       else if (explanation) setExplanation(null);
       else if (indMenu) setIndMenu(false);
       else if (drawMode) setDrawMode(false);
@@ -668,6 +755,9 @@ export default function App() {
       t: cycleTheme,
       ']': toggleSide,
       b: toggleSide,
+      o: () => togglePane('ladder'),
+      d: () => togglePane('depth'),
+      c: () => togglePane('candles'),
       v: () => switchVenue(otherVenue),
       w: () => setDrawMode(!drawMode),
       e: openExplanation,
@@ -749,17 +839,19 @@ export default function App() {
   // ---- zoom buttons and resize handles over the canvas ----
   const zoom = (e: React.MouseEvent, pane: ZoomPane, dir: 1 | -1 | 0) => { e.stopPropagation(); engineRef.current?.zoom(pane, dir); };
   const setLayout = useCallback((next: LayoutPrefs) => { setLayoutPrefs(next); engineRef.current?.setLayout(next); }, [setLayoutPrefs]);
-  /** Drag a split. `which`: the ladder edge or the depth / candles edge. */
-  function dragStart(e: React.PointerEvent, which: 'ladder' | 'depth') {
+  /** Drag a resize handle between two panes (or two groups of panes). */
+  function dragStart(e: React.PointerEvent, sp: Splitter) {
     e.stopPropagation();
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
+    const narrow = !!panes?.narrow;
     let raf = 0, lx = 0, ly = 0;
     const apply = () => {
       raf = 0;
       const r = canvasHost.current!.getBoundingClientRect();
-      setLayout(dragSplit(layoutRef.current, which, lx - r.left, ly - r.top, r.width, r.height));
+      // the handle's geometry from when the drag began: only its two sides change while dragging
+      setLayout(dragSplitter(layoutRef.current, sp, sp.orient === 'v' ? lx - r.left : ly - r.top, narrow));
     };
     // at most one relayout per frame, however fast the pointer reports
     const move = (ev: PointerEvent) => { lx = ev.clientX; ly = ev.clientY; if (!raf) raf = requestAnimationFrame(apply); };
@@ -774,33 +866,98 @@ export default function App() {
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
   }
-  function splitKey(e: React.KeyboardEvent, which: 'ladder' | 'depth') {
-    const vertical = panes && !panes.narrow && which === 'ladder';
-    const d = (vertical ? { ArrowLeft: -1, ArrowRight: 1 } : { ArrowUp: -1, ArrowDown: 1 } as Record<string, number>)[e.key as 'ArrowLeft'];
+  function splitKey(e: React.KeyboardEvent, sp: Splitter) {
+    const d = (sp.orient === 'v' ? { ArrowLeft: -1, ArrowRight: 1 } : { ArrowUp: -1, ArrowDown: 1 } as Record<string, number>)[e.key as 'ArrowLeft'];
     if (!d) return;
     e.preventDefault();
-    const mode = panes?.narrow ? 'narrow' : 'wide';
-    const cur = layoutPrefs[mode][which];
-    setLayout({ ...layoutPrefs, [mode]: { ...layoutPrefs[mode], [which]: Math.max(0.05, Math.min(0.95, cur + d * 0.02)) } });
+    setLayout(dragSplitter(layoutPrefs, sp, sp.at + d * 20, !!panes?.narrow));
     persist();
   }
-  function resetSplit(which: 'ladder' | 'depth') {
-    const mode = panes?.narrow ? 'narrow' : 'wide';
-    setLayout({ ...layoutPrefs, [mode]: { ...layoutPrefs[mode], [which]: DEFAULT_LAYOUT[mode][which] } });
+  function resetSplit(sp: Splitter) {
+    setLayout(evenSplitter(layoutPrefs, sp, !!panes?.narrow));
     persist();
+  }
+  function setLayoutPersist(next: LayoutPrefs) { setLayout(next); persist(); }
+  function togglePane(id: PaneId) {
+    const hide = !layoutRef.current.hidden.includes(id);
+    const next = setPaneHidden(layoutRef.current, id, hide);
+    if (next === layoutRef.current) { toast('At least one chart stays on screen', 'warn'); return; }
+    setLayoutPersist(next);
+    toast(`${paneTitle[id]} ${hide ? 'hidden' : 'shown'}`);
+  }
+  /**
+   * Drag a pane by its grip to another place: onto a side of another pane, or
+   * onto an edge of the whole chart area. Nothing relayouts until the drop.
+   */
+  function moveStart(e: React.PointerEvent, id: PaneId) {
+    e.stopPropagation();
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    let raf = 0, lx = e.clientX, ly = e.clientY;
+    let cur: { id: PaneId; target: PaneId | null; side: DropSide; preview: Rect } | null = null;
+    const EDGE = 28;
+    const where = () => {
+      raf = 0;
+      const host = canvasHost.current!.getBoundingClientRect();
+      const L = computeLayout(host.width, host.height, layoutRef.current);
+      const x = lx - host.left, y = ly - host.top;
+      const whole = { x: 0, y: 0, w: host.width, h: host.height };
+      // near the outer edge of the charts: the pane takes that whole side
+      const edge: DropSide | null = L.narrow ? (y < EDGE ? 'top' : y > host.height - EDGE ? 'bottom' : null)
+        : x < EDGE ? 'left' : x > host.width - EDGE ? 'right' : y < EDGE ? 'top' : y > host.height - EDGE ? 'bottom' : null;
+      if (edge) cur = { id, target: null, side: edge, preview: dropPreview(whole, edge) };
+      else {
+        const t = PANE_IDS.find((p) => p !== id && L.shown[p] && x >= L[p].x && x < L[p].x + L[p].w && y >= L[p].y && y < L[p].y + L[p].h);
+        if (t) {
+          let side = dropSide(L[t], x, y);
+          if (L.narrow) side = y < L[t].y + L[t].h / 2 ? 'top' : 'bottom'; // stacked: only above or below
+          cur = { id, target: t, side, preview: dropPreview(L[t], side) };
+        } else cur = null;
+      }
+      setMoving(cur ?? { id, target: id, side: 'top', preview: { x: 0, y: 0, w: 0, h: 0 } });
+    };
+    const move = (ev: PointerEvent) => { lx = ev.clientX; ly = ev.clientY; if (!raf) raf = requestAnimationFrame(where); };
+    const up = (ev: PointerEvent) => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (raf) cancelAnimationFrame(raf);
+      if (ev.type === 'pointerup') { lx = ev.clientX; ly = ev.clientY; where(); }
+      setMoving(null);
+      if (ev.type === 'pointerup' && cur) {
+        const next = movePane(layoutRef.current, id, cur.target, cur.side);
+        if (next !== layoutRef.current) setLayoutPersist(next);
+      }
+    };
+    where();
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+  function moveKey(e: React.KeyboardEvent, id: PaneId) {
+    // arrow keys on the grip move the pane to that side of the charts
+    const side = ({ ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'top', ArrowDown: 'bottom' } as Record<string, DropSide>)[e.key];
+    if (!side) return;
+    e.preventDefault();
+    setLayoutPersist(movePane(layoutPrefs, id, null, side));
   }
   function dragSide(e: React.PointerEvent) {
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => { setSideW(Math.round(Math.max(SIDE_W.min, Math.min(SIDE_W.max, innerWidth - ev.clientX)))); };
+    const host = (el.parentElement as HTMLElement).getBoundingClientRect();
+    const move = (ev: PointerEvent) => {
+      const w = sideLeft ? ev.clientX - host.left : host.right - ev.clientX;
+      setSideW(Math.round(Math.max(SIDE_W.min, Math.min(SIDE_W.max, w))));
+    };
     const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); persist(); };
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
   }
   function sideKey(e: React.KeyboardEvent) {
-    const d = e.key === 'ArrowLeft' ? 20 : e.key === 'ArrowRight' ? -20 : 0;
+    const d = (e.key === 'ArrowLeft' ? 20 : e.key === 'ArrowRight' ? -20 : 0) * (sideLeft ? -1 : 1);
     if (!d) return;
     e.preventDefault();
     setSideW(Math.max(SIDE_W.min, Math.min(SIDE_W.max, sideW + d)));
@@ -857,8 +1014,9 @@ export default function App() {
   }
 
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
-  const splitPct = (which: 'ladder' | 'depth') => Math.round(layoutPrefs[panes?.narrow ? 'narrow' : 'wide'][which] * 100);
+  const splitPct = (sp: Splitter) => Math.round(((sp.at - sp.start) / Math.max(1, sp.span)) * 100);
   const c = panes?.candles, d = panes?.depth;
+  const paneCount = PANE_IDS.length - layoutPrefs.hidden.length;
   const cg = c ? geom(c) : null;
 
   return (
@@ -929,6 +1087,38 @@ export default function App() {
                 </>
               )}
             </div>
+            <div className="pop-anchor">
+              <button className={cx('icon', layoutOpen && 'on')} title="Panels: show, hide and arrange" aria-label="Panels" aria-expanded={layoutOpen} onClick={() => setLayoutOpen(!layoutOpen)}><Icon name="grid" /></button>
+              {layoutOpen && (
+                <>
+                  <div className="scrim" onClick={() => setLayoutOpen(false)}></div>
+                  <div className="popover layoutpop" role="dialog" aria-label="Panels">
+                    <h3>Show</h3>
+                    {PANE_IDS.map((id) => {
+                      const on = !layoutPrefs.hidden.includes(id);
+                      return (
+                        <label key={id} className="check" title={on && paneCount < 2 ? 'At least one chart stays on screen' : undefined}>
+                          <input type="checkbox" checked={on} disabled={on && paneCount < 2} onChange={() => togglePane(id)} /> {paneTitle[id]}
+                          <kbd>{id === 'ladder' ? 'O' : id[0].toUpperCase()}</kbd>
+                        </label>
+                      );
+                    })}
+                    <label className="check"><input type="checkbox" checked={sideOpen} onChange={toggleSide} /> Side panel<kbd>B</kbd></label>
+                    <label className="row">Side panel on the
+                      <select value={sideLeft ? 'left' : 'right'} onChange={(e) => setSideSide(e.currentTarget.value === 'left')}>
+                        <option value="left">Left</option><option value="right">Right</option>
+                      </select>
+                    </label>
+                    <h3>Arrange</h3>
+                    <div className="presets">
+                      {PRESETS.map((pr) => <button key={pr.id} className="ghost" onClick={() => { setLayoutPersist(applyPreset(layoutPrefs, pr.id)); }}>{pr.name}</button>)}
+                    </div>
+                    <p className="dim small">Drag a panel by its <Icon name="grip" size={11} /> grip onto a side of another panel, or onto an edge of the charts. Drag the lines between panels to resize them.</p>
+                    <div className="foot"><button className="ghost" onClick={resetView}>Reset layout and zoom</button></div>
+                  </div>
+                </>
+              )}
+            </div>
             <button className={cx('icon', sideOpen && 'on')} title={`${sideOpen ? 'Hide' : 'Show'} the side panel (B)`} aria-label={`${sideOpen ? 'Hide' : 'Show'} the side panel`} aria-pressed={sideOpen} onClick={toggleSide}><Icon name="sidebar" /></button>
           </div>
         </header>
@@ -965,7 +1155,7 @@ export default function App() {
           )}
         </div>
 
-        <main>
+        <main className={cx(sideLeft && 'sideleft')}>
           <div className={cx('stage', drawMode && 'drawing')} ref={canvasHost}
             onPointerDown={brushStart} onPointerUp={(e) => brushEnd(e)} onPointerCancel={(e) => brushEnd(e, true)}
             onPointerMove={(e) => { ptr(e); brushMove(e); }} onPointerLeave={(e) => ptr(e, false)} onClick={click}
@@ -973,20 +1163,26 @@ export default function App() {
             {/* the canvas is created by the engine effect: it is handed to the render worker once */}
             {panes && c && d && cg && (
               <>
-                {PANES.map((p) => {
+                {PANES.filter((p) => panes.shown[p]).map((p) => {
                   const r = panes[p];
                   return (
                     <div key={p} className="zoom" role="group" aria-label={`Zoom ${paneNames[p]}`} style={{ left: r.x + r.w - HEADER_CTRL_W, top: r.y + 2, width: HEADER_CTRL_W - 4 }} onClick={stop}>
+                      <button className="grip" title={`Drag to move the ${paneNames[p]} (arrow keys: move it to that side)`} aria-label={`Move ${paneNames[p]}`}
+                        onPointerDown={(e) => moveStart(e, p)} onKeyDown={(e) => moveKey(e, p)}><Icon name="grip" size={12} /></button>
+                      <button title={`Hide the ${paneNames[p]} (${p === 'ladder' ? 'O' : p[0].toUpperCase()})`} aria-label={`Hide ${paneNames[p]}`}
+                        disabled={paneCount < 2} onClick={(e) => { e.stopPropagation(); togglePane(p); }}><Icon name="close" size={11} /></button>
+                      <span className="zsep" aria-hidden="true"></span>
                       <button title={zoomTips[p][0]} aria-label={`Zoom out ${paneNames[p]}`} onClick={(e) => zoom(e, p, -1)}>−</button>
                       <button title={zoomTips[p][1]} aria-label={`Zoom in ${paneNames[p]}`} onClick={(e) => zoom(e, p, 1)}>+</button>
                       <button title={p === 'depth' ? 'Auto-fit the price range' : 'Default zoom'} aria-label={`Reset zoom ${paneNames[p]}`} onClick={(e) => zoom(e, p, 0)}>fit</button>
                     </div>
                   );
                 })}
-                <div className="axis x" role="slider" tabIndex={0} aria-label="Depth chart price range zoom" aria-valuemin={ZOOM.depthPct.min} aria-valuemax={ZOOM.depthPct.max} aria-valuenow={zoomState.depthRangePct}
+                {panes.shown.depth && <div className="axis x" role="slider" tabIndex={0} aria-label="Depth chart price range zoom" aria-valuemin={ZOOM.depthPct.min} aria-valuemax={ZOOM.depthPct.max} aria-valuenow={zoomState.depthRangePct}
                   title="Drag left or right to zoom the price range. Double-click to auto-fit."
                   style={{ left: d.x, top: d.y + d.h - DEPTH_AXIS_H, width: d.w - 60, height: DEPTH_AXIS_H }}
-                  {...axisProps('depth')}></div>
+                  {...axisProps('depth')}></div>}
+                {panes.shown.candles && <>
                 <div className="zoom wintools" role="group" aria-label="Pattern analysis window and indicators" style={{ left: c.x + c.w - HEADER_CTRL_W - CANDLE_TOOLS_W, top: c.y + 2, width: CANDLE_TOOLS_W - 4 }} onClick={stop}>
                   <button className={cx(indMenu && 'on')} aria-expanded={indMenu} title="Add, remove and configure indicators" onClick={() => setIndMenu(!indMenu)}>indicators</button>
                   <button className={cx(drawMode && 'on')} aria-pressed={drawMode} title="Drag a box over the candles to search for patterns only inside it (or shift+drag any time)" onClick={() => setDrawMode(!drawMode)}>{drawMode ? 'drag a box…' : 'window'}</button>
@@ -1008,24 +1204,18 @@ export default function App() {
                   title="Drag left or right to zoom time. Double-click to reset."
                   style={{ left: c.x, top: cg.timeY, width: c.w - CANDLE_AXIS_W, height: CANDLE_TIME_H }}
                   {...axisProps('x')}></div>
-                {panes.narrow ? (
-                  <>
-                    <div className="split h" role="separator" aria-orientation="horizontal" aria-label="Resize order book" tabIndex={0} aria-valuemin={5} aria-valuemax={95} aria-valuenow={splitPct('ladder')}
-                      style={{ top: panes.ladder.h - 4, left: 0, width: stage.w }}
-                      onPointerDown={(e) => dragStart(e, 'ladder')} onKeyDown={(e) => splitKey(e, 'ladder')} onDoubleClick={() => resetSplit('ladder')}></div>
-                    <div className="split h" role="separator" aria-orientation="horizontal" aria-label="Resize depth chart" tabIndex={0} aria-valuemin={5} aria-valuemax={95} aria-valuenow={splitPct('depth')}
-                      style={{ top: panes.candles.y - 4, left: 0, width: stage.w }}
-                      onPointerDown={(e) => dragStart(e, 'depth')} onKeyDown={(e) => splitKey(e, 'depth')} onDoubleClick={() => resetSplit('depth')}></div>
-                  </>
-                ) : (
-                  <>
-                    <div className="split v" role="separator" aria-orientation="vertical" aria-label="Resize order book" tabIndex={0} aria-valuemin={5} aria-valuemax={95} aria-valuenow={splitPct('ladder')}
-                      style={{ left: panes.ladder.w - 4, top: 0, height: stage.h }}
-                      onPointerDown={(e) => dragStart(e, 'ladder')} onKeyDown={(e) => splitKey(e, 'ladder')} onDoubleClick={() => resetSplit('ladder')}></div>
-                    <div className="split h" role="separator" aria-orientation="horizontal" aria-label="Resize depth chart" tabIndex={0} aria-valuemin={5} aria-valuemax={95} aria-valuenow={splitPct('depth')}
-                      style={{ top: panes.depth.h - 4, left: panes.depth.x, width: panes.depth.w }}
-                      onPointerDown={(e) => dragStart(e, 'depth')} onKeyDown={(e) => splitKey(e, 'depth')} onDoubleClick={() => resetSplit('depth')}></div>
-                  </>
+                </>}
+                {panes.splitters.map((sp) => (
+                  <div key={`${sp.path.join('.')}:${sp.a}`} className={cx('split', sp.orient)} role="separator" aria-orientation={sp.orient === 'v' ? 'vertical' : 'horizontal'}
+                    aria-label={`Resize ${sp.label}`} tabIndex={0} aria-valuemin={0} aria-valuemax={100} aria-valuenow={splitPct(sp)}
+                    title="Drag to resize. Double-click to share the space evenly."
+                    style={sp.orient === 'v' ? { left: sp.at - 4, top: sp.cross0, height: sp.cross1 - sp.cross0 } : { top: sp.at - 4, left: sp.cross0, width: sp.cross1 - sp.cross0 }}
+                    onPointerDown={(e) => dragStart(e, sp)} onKeyDown={(e) => splitKey(e, sp)} onDoubleClick={() => resetSplit(sp)}></div>
+                ))}
+                {moving && moving.preview.w > 0 && (
+                  <div className="droppreview" aria-hidden="true" style={{ left: moving.preview.x, top: moving.preview.y, width: moving.preview.w, height: moving.preview.h }}>
+                    <span>{paneTitle[moving.id]} {moving.target ? `${moving.side === 'top' ? 'above' : moving.side === 'bottom' ? 'below' : `${moving.side} of`} the ${paneNames[moving.target]}` : `along the ${moving.side} edge`}</span>
+                  </div>
                 )}
               </>
             )}
@@ -1056,6 +1246,10 @@ export default function App() {
                 onShowChart={setShowChartTo} onShowCandle={setShowCandleTo} onClearWindow={clearWindow} onExplain={openExplanation} onSelect={selectPattern} />
             </div>
 
+            <div className="panel" role="tabpanel" id="panel-forecast" aria-labelledby="tab-forecast" hidden={tab !== 'forecast'}>
+              <ForecastPanel horizon={horizon} interval={interval} onHorizon={setHorizon} />
+            </div>
+
             <div className="panel" role="tabpanel" id="panel-liq" aria-labelledby="tab-liq" hidden={tab !== 'liq'}>
               <LiqPanel showLiq={showLiq} onShowLiq={setShowLiqTo} />
             </div>
@@ -1065,6 +1259,10 @@ export default function App() {
                 <h2>Indicators</h2>
                 <Indicators list={indicators} theme={theme} onchange={setIndicators} />
               </section>
+            </div>
+
+            <div className="panel" role="tabpanel" id="panel-game" aria-labelledby="tab-game" hidden={tab !== 'game'}>
+              <Game venue={venue} symbol={res?.symbol ?? null} label={pairText} base={res?.base ?? ''} quote={res?.quote ?? ''} />
             </div>
 
             <div className="panel" role="tabpanel" id="panel-health" aria-labelledby="tab-health" hidden={tab !== 'health'}>

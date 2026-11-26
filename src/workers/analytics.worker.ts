@@ -9,6 +9,7 @@ import type { Venue } from '../shared/config';
 import { MAX_BARS, prepend, stepOf } from '../feeds/history';
 import { computeAll, defaultIndicators, type IndConfig } from '../indicators/spec';
 import { applyTail, type LiqData } from '../patterns/liq';
+import { DEFAULT_HORIZON, forecast, type Forecast } from '../forecast/forecast';
 
 /**
  * Candles in, indicators and patterns out. Runs off the render and feed threads;
@@ -29,6 +30,9 @@ let win: AnalysisWindow | null = null;
 let indicators: IndConfig[] = defaultIndicators();
 /** the estimated liquidation map (Binance perpetual), for the liquidation signals */
 let liq: LiqData | null = null;
+/** candles ahead for the research forecast */
+let horizon = DEFAULT_HORIZON;
+let fc: Forecast | null = null;
 
 /** Indicators over everything, patterns over the window when one is drawn. */
 function run(candles: Candle[]): Detection {
@@ -59,7 +63,11 @@ function compute(): void {
   const closedCount = candles.length && !candles[candles.length - 1].closed ? candles.length - 1 : candles.length;
   const fresh = !cached || closedCount !== lastClosedCount;
   const d = fresh ? run(candles) : cached!;
-  if (fresh) { cached = d; lastClosedCount = closedCount; }
+  if (fresh) {
+    cached = d; lastClosedCount = closedCount;
+    // full history, not the window: the forecast is about what comes after the last candle
+    fc = forecast(candles, { horizon, patterns: win ? detect(candles, { liq }).patterns : d.patterns });
+  }
   const n = candles.length;
   const out: AnalyticsOut = {
     symbol,
@@ -84,6 +92,7 @@ function compute(): void {
       backfill: series[venue].backfill, source: series[venue].source,
       window: win, study: d.study ?? null, t: times, last: n ? candles[n - 1].c : NaN,
       day: dayStats(candles),
+      forecast: fc,
     }, [times.buffer]);
   }
 }
@@ -153,6 +162,10 @@ self.onmessage = (e: MessageEvent) => {
     dirty = true;
     if (timer) clearTimeout(timer);
     compute();
+  } else if (m.type === 'horizon') {
+    horizon = m.horizon;
+    cached = null;
+    schedule();
   } else if (m.type === 'window') {
     win = m.window;
     cached = null;

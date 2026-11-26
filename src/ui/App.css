@@ -90,6 +90,22 @@
   .shell .split.h:where(:not(.scope, .scope *)) { height: 8px; cursor: row-resize; }
   .shell .split:hover:where(:not(.scope, .scope *)), .shell .split:focus-visible:where(:not(.scope, .scope *)) { background: color-mix(in srgb, var(--accent) 35%, transparent); outline: none; }
   .shell .split.side:where(:not(.scope, .scope *)) { position: relative; flex: none; margin: 0 -4px; align-self: stretch; }
+  .shell main.sideleft:where(:not(.scope, .scope *)) { flex-direction: row-reverse; }
+  .shell main.sideleft aside:where(:not(.scope, .scope *)) { border-left: 0; border-right: 1px solid var(--line); }
+  .shell .zoom .grip:where(:not(.scope, .scope *)) { cursor: grab; touch-action: none; display: inline-flex; align-items: center; justify-content: center; padding: 0 4px; }
+  .shell .zoom .grip:active:where(:not(.scope, .scope *)) { cursor: grabbing; }
+  .shell .zoom button:disabled:where(:not(.scope, .scope *)) { opacity: 0.4; cursor: default; }
+  .shell .zoom button svg:where(:not(.scope, .scope *)) { display: block; }
+  .shell .zoom .zsep:where(:not(.scope, .scope *)) { width: 6px; }
+  .shell .droppreview:where(:not(.scope, .scope *)) { position: absolute; z-index: 6; pointer-events: none; display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--accent) 18%, transparent); border: 2px solid var(--accent); border-radius: 4px; }
+  .shell .droppreview span:where(:not(.scope, .scope *)) { padding: 4px 10px; border-radius: 12px; background: var(--raised); color: var(--text); font-size: 12px; box-shadow: var(--shadow-lg); }
+  .shell .layoutpop .check:where(:not(.scope, .scope *)) { align-items: center; gap: 6px; }
+  .shell .layoutpop .check kbd:where(:not(.scope, .scope *)) { margin-left: auto; }
+  .shell .layoutpop .presets:where(:not(.scope, .scope *)) { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+  .shell .layoutpop .presets button:where(:not(.scope, .scope *)) { text-align: left; }
+  .shell .layoutpop p:where(:not(.scope, .scope *)) { margin: 6px 0; line-height: 1.4; }
+  .shell .layoutpop p svg:where(:not(.scope, .scope *)) { vertical-align: -1px; }
 
   /* ---- side panel: tabs ---- */
 .shell aside:where(:not(.scope, .scope *)) { width: var(--side-w, 310px); display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--panel); min-height: 0; }
@@ -121,6 +137,34 @@
   .shell .pill:where(:not(.scope, .scope *)) { font-size: 11px; text-transform: none; letter-spacing: 0; padding: 1px 8px; border-radius: 10px; background: var(--hover); color: var(--warn); font-weight: 400; }
   .shell .pill.ok:where(:not(.scope, .scope *)) { color: var(--bid); }
   .shell .pill.bad:where(:not(.scope, .scope *)) { color: var(--ask); }
+  /* research forecast */
+  .shell .forecast .research:where(:not(.scope, .scope *)) { margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: var(--hover); border-left: 3px solid var(--warn); font-size: 12px; color: var(--dim); }
+  .shell .forecast .research b:where(:not(.scope, .scope *)) { color: var(--text); }
+  .shell .forecast .seg:where(:not(.scope, .scope *)) { display: inline-flex; gap: 2px; margin-left: auto; text-transform: none; letter-spacing: 0; }
+  .shell .forecast .seg button:where(:not(.scope, .scope *)) { border: 1px solid var(--line); background: transparent; color: var(--dim); font: 11px var(--mono); padding: 1px 7px; border-radius: 5px; }
+  .shell .forecast .seg button.on:where(:not(.scope, .scope *)) { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+  .shell .forecast .verdict:where(:not(.scope, .scope *)) { display: flex; align-items: baseline; justify-content: space-between; margin: 10px 0 4px; padding: 10px 12px; border-radius: 8px; background: var(--hover); }
+  .shell .forecast .verdict .v:where(:not(.scope, .scope *)) { font-size: 18px; font-weight: 600; }
+  .shell .forecast .verdict .p:where(:not(.scope, .scope *)) { font-size: 18px; }
+  .shell .forecast .verdict .p small:where(:not(.scope, .scope *)) { font-size: 11px; color: var(--dim); }
+  .shell .forecast .verdict.buy .v:where(:not(.scope, .scope *)) { color: var(--bid); }
+  .shell .forecast .verdict.sell .v:where(:not(.scope, .scope *)) { color: var(--ask); }
+  .shell .forecast .verdict.wait .v:where(:not(.scope, .scope *)) { color: var(--dim); }
+  .shell .forecast .flags:where(:not(.scope, .scope *)) { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; padding: 0; margin: 8px 0; }
+  .shell .forecast .flags li:where(:not(.scope, .scope *)) { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--hover); color: var(--dim); }
+  .shell .forecast .flags li.bull:where(:not(.scope, .scope *)) { color: var(--bid); background: var(--bid-soft, var(--hover)); }
+  .shell .forecast .flags li.bear:where(:not(.scope, .scope *)) { color: var(--ask); background: var(--ask-soft, var(--hover)); }
+  .shell .forecast .flags li.warn:where(:not(.scope, .scope *)) { color: var(--warn); }
+  .shell .forecast h3:where(:not(.scope, .scope *)) { font-size: 12px; margin: 14px 0 6px; color: var(--dim); font-weight: 600; }
+  .shell .forecast .factors:where(:not(.scope, .scope *)) { list-style: none; padding: 0; margin: 0; display: grid; gap: 5px; }
+  .shell .forecast .factors li:where(:not(.scope, .scope *)) { display: grid; grid-template-columns: 92px 70px 1fr; gap: 8px; align-items: center; font-size: 12px; }
+  .shell .forecast .factors .bar:where(:not(.scope, .scope *)) { position: relative; height: 8px; border-radius: 4px; background: var(--hover); overflow: hidden; }
+  .shell .forecast .factors .bar::after:where(:not(.scope, .scope *)) { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line); }
+  .shell .forecast .factors .bar i:where(:not(.scope, .scope *)) { position: absolute; top: 0; bottom: 0; }
+  .shell .forecast .factors .bar i.bull:where(:not(.scope, .scope *)) { background: var(--bid); }
+  .shell .forecast .factors .bar i.bear:where(:not(.scope, .scope *)) { background: var(--ask); }
+  .shell .forecast .factors .note:where(:not(.scope, .scope *)) { font-size: 11px; line-height: 1.3; }
+  .shell .forecast h2:where(:not(.scope, .scope *)) { display: flex; align-items: center; gap: 6px; }
   .shell .link:where(:not(.scope, .scope *)) { border: 0; background: none; color: var(--accent); padding: 0; text-transform: none; letter-spacing: 0; font-size: 12px; }
   .shell .tog:where(:not(.scope, .scope *)) { font-size: 12px; text-transform: none; letter-spacing: 0; margin-left: auto; font-weight: 400; }
   .shell .explain:where(:not(.scope, .scope *)) { margin: 4px 0 8px; display: inline-flex; gap: 8px; align-items: center; }
@@ -193,6 +237,8 @@
     .shell .toolbar:where(:not(.scope, .scope *)) { padding: 5px 10px; }
     .shell .tf button:where(:not(.scope, .scope *)), .shell .tg:where(:not(.scope, .scope *)), .shell .fav:where(:not(.scope, .scope *)) { min-height: 30px; }
     .shell main:where(:not(.scope, .scope *)) { flex-direction: column; overflow-y: auto; }
+    .shell main.sideleft:where(:not(.scope, .scope *)) { flex-direction: column; }
+    .shell main.sideleft aside:where(:not(.scope, .scope *)) { border-right: 0; }
     .shell .stage:where(:not(.scope, .scope *)) { flex: none; height: 78vh; }
     .shell .split.side:where(:not(.scope, .scope *)) { display: none; }
     .shell aside:where(:not(.scope, .scope *)) { width: auto; border-left: 0; border-top: 1px solid var(--line); }

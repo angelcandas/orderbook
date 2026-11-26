@@ -1,0 +1,71 @@
+/* Scoped to the game panel (.game); the app's own rules stop at .scope. */
+.game h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 14px 0 6px; display: flex; align-items: center; gap: 8px; }
+.game h2 .rec { margin-left: auto; text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; color: var(--text); }
+.game p { margin: 6px 0; line-height: 1.45; }
+.game .dim { color: var(--dim); }
+.game .small { font-size: 12px; }
+.game .warn { color: var(--warn); }
+.game .mono { font-family: var(--mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; }
+.game .up { color: var(--bid); }
+.game .down { color: var(--ask); }
+.game button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.game button:disabled { opacity: 0.45; cursor: default; }
+.game .link { border: 0; background: none; color: var(--accent); padding: 0; font-size: 12px; }
+.game .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.game .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.game .seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 6px; }
+.game .seg button { border: 0; background: transparent; color: var(--dim); padding: 3px 8px; border-radius: 4px; font-size: 12px; }
+.game .seg button.on { background: var(--accent-soft); color: var(--text); }
+
+.game .clock { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.game .clock .time { font-size: 28px; font-weight: 600; }
+.game .clock .time.soon { color: var(--warn); }
+.game .board { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.game .side { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.game .side.lead { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft) inset; }
+.game .side .who { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.game .side .crown { color: var(--accent); text-transform: none; letter-spacing: 0; }
+.game .side .val { font-size: 17px; font-weight: 600; margin: 2px 0; }
+.game .side .pl { font-size: 13px; }
+.game .ai { margin: 4px 0 8px; }
+
+.game .curve { margin: 0 0 8px; }
+.game .curve svg { width: 100%; height: 70px; display: block; border: 1px solid var(--line); border-radius: 6px; }
+.game .curve polyline { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.game .curve polyline.you { stroke: var(--accent); }
+.game .curve polyline.ai { stroke: var(--warn); }
+.game .curve line.base { stroke: var(--faint); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.game .curve.empty { padding: 22px 0; text-align: center; border: 1px dashed var(--line); border-radius: 6px; }
+.game .curve figcaption { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
+.game .key { display: inline-block; width: 12px; height: 2px; margin-left: 8px; }
+.game .key:first-child { margin-left: 0; }
+.game .key.you { background: var(--accent); }
+.game .key.ai { background: var(--warn); }
+.game .key.base { background: var(--faint); }
+
+.game .order { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
+.game .amt { display: flex; align-items: center; gap: 6px; }
+.game .amt input { flex: 1; min-width: 0; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+.game .chips { display: flex; gap: 12px; }
+.game .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.game .btns button { flex: 1; min-width: 80px; font-weight: 600; }
+.game .btns .buy:not(:disabled) { background: var(--bid-soft); border-color: var(--bid); color: var(--bid); }
+.game .btns .sell:not(:disabled) { background: var(--ask-soft); border-color: var(--ask); color: var(--ask); }
+.game .btns .sell.ghost:not(:disabled) { background: transparent; }
+.game .end { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
+
+.game .result { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 4px 0 8px; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.game .result .title { font-size: 16px; font-weight: 600; }
+.game .result.you { border-color: var(--bid); background: var(--bid-soft); }
+.game .result.ai { border-color: var(--ask); background: var(--ask-soft); }
+
+.game .trades, .game .past { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.game .trades li { display: grid; grid-template-columns: auto auto 1fr auto; gap: 2px 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.game .trades .why { grid-column: 2 / -1; }
+.game .past li { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
+.game .past .mono { margin-left: auto; }
+.game .tag { font-size: 11px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); }
+.game .tag.you { color: var(--accent); border-color: var(--accent); }
+.game .tag.ai { color: var(--warn); border-color: var(--warn); }
+.game .past .tag.you { color: var(--bid); border-color: var(--bid); }
+.game .past .tag.ai { color: var(--ask); border-color: var(--ask); }

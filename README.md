@@ -26,8 +26,9 @@ npm run emulator -- --rate 20000 --pairs 10   # level changes per second, per ve
 
 The bar shows the pair, venue and a live ticker (mid, 24 h change, high, low,
 volume, spread), the feed status and the frame rate. Candle sizes 1m to 1D are
-one click (more under "More"), the side panel has tabs for patterns, alerts,
-liquidations, indicators and health, and the gear holds the data source, load
+one click (more under "More"), the side panel has tabs for patterns, a
+research-only market forecast ([docs/forecast.md](docs/forecast.md)), alerts,
+liquidations, indicators, the trading game and health, and the gear holds the data source, load
 and display settings. Press `?` for keyboard shortcuts (`/` searches pairs,
 `1`–`6` pick candle sizes, `V` switches venue, `F` fits every panel). Hover a
 book row to see the average price and value of filling down to it. The design
@@ -44,6 +45,10 @@ own symbol (`ETH/EUR` is `ETH/EUR` on Kraken, `ETHEUR` on Binance). Where a
 venue has no exact listing, USD, USDT and USDC stand in for each other and the
 panel says so; otherwise the book shows "not listed". Switching pair
 resubscribes only the books that change on the open sockets, with no reconnect.
+
+## Ask Claude (MCP)
+
+`npm run mcp` starts an MCP server that lets Claude answer questions about the market with the app's own analysis: status, research forecasts, and candle charts (as images) for the last day, week, month or year, or with patterns marked between two dates. Set up for Claude Desktop, Claude Code and claude.ai in [docs/mcp.md](docs/mcp.md).
 
 ## Deploy
 
@@ -93,6 +98,16 @@ that domain to the Pages project through the Cloudflare API; the
   per-message path. A hit shows an in-app toast and, if allowed, a desktop
   notification. A pair with an armed alert stays subscribed even when it is not
   on screen. A move that reverses within 200 ms can be missed.
+- **Trading game** (`src/game/game.ts`, `src/ui/Game.tsx`): you and a house AI
+  each get $10,000 of play money on the pair in view for 5, 15, 30 or 60
+  minutes. Orders fill at the live best ask (buy) or bid (sell) with a 0.1%
+  fee, spot only. When time is up both are sold at the bid and the larger
+  balance wins. The AI looks every 10 s at the patterns on the chart's latest
+  candles and the trend (EMA 5/13) and RSI of 5 s bars of the mid it watched,
+  sizes its holding by how strongly they agree, waits 30 s between trades, and
+  cuts a 0.6% loss. The game, your record and past results are kept in
+  localStorage, so a reload resumes it. Away from the game's pair both sides
+  wait while the clock runs. Play money and a toy opponent, not advice.
 - **Liquidation worker** (`src/workers/liquidation.worker.ts`) is separate from
   the book path and feeds the render worker, which draws liquidation levels as
   green to red bands behind the candles, with the hottest prices labelled and
