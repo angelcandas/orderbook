@@ -26,7 +26,8 @@ npm run emulator -- --rate 20000 --pairs 10   # level changes per second, per ve
 
 The bar shows the pair, venue and a live ticker (mid, 24 h change, high, low,
 volume, spread), the feed status and the frame rate. Candle sizes 1m to 1D are
-one click (more under "More"), the side panel has tabs for patterns, alerts,
+one click (more under "More"), the side panel has tabs for patterns, a
+research-only market forecast ([docs/forecast.md](docs/forecast.md)), alerts,
 liquidations, indicators and health, and the gear holds the data source, load
 and display settings. Press `?` for keyboard shortcuts (`/` searches pairs,
 `1`–`6` pick candle sizes, `V` switches venue, `F` fits every panel). Hover a

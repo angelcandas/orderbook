@@ -52,8 +52,9 @@ function getSeries(sim: MarketSim, minutes: number): Candle[] {
   if (!s) {
     s = synthHistory(sim.midTick * sim.inst.tickSize, 3000, minutes * 60_000, seed++ * 31);
     // re-anchor the sim's mid to the end of the history so the book matches the chart
-    const shift = sim.midTick * sim.inst.tickSize - s[s.length - 1].c;
-    for (const c of s) { c.o += shift; c.h += shift; c.l += shift; c.c += shift; }
+    // scaled, not shifted: a shift can push early bars below zero
+    const k = (sim.midTick * sim.inst.tickSize) / s[s.length - 1].c;
+    for (const c of s) { c.o *= k; c.h *= k; c.l *= k; c.c *= k; }
     series.set(key, s);
   }
   return s;
