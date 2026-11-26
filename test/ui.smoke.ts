@@ -75,6 +75,17 @@ async function main() {
   await period.press('Enter');
   check('indicator added', (await page.locator('#panel-ind li').count()) === 4);
 
+  await page.click('#tab-forecast');
+  check('forecast says research only', /Research only, not financial advice/.test(await page.textContent('#panel-forecast') ?? ''));
+  const gotForecast = await page.waitForSelector('#panel-forecast .verdict', { timeout: 20_000 }).then(() => true, () => false);
+  check('forecast gives a top, a bottom and a probability', gotForecast && await page.evaluate(() => {
+    const t = document.querySelector('#panel-forecast')!.textContent ?? '';
+    return /Top/.test(t) && /Bottom/.test(t) && /\d+% chance higher/.test(t);
+  }), await page.textContent('#panel-forecast'));
+  await page.click('#panel-forecast .seg button:has-text("50")');
+  check('forecast horizon switches', (await page.textContent('#panel-forecast .seg button.on')) === '50');
+  await page.click('#tab-ind'); // the reload check below expects the Indicators tab
+
   await page.click('button[aria-label^="Add BTC/USD to favourites"]');
   await page.focus('[aria-label="Resize side panel"]'); await k('ArrowLeft'); await k('ArrowLeft');
   await page.focus('[aria-label="Resize order book"]'); await k('ArrowRight');

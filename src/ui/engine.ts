@@ -10,6 +10,7 @@ import type { LayoutPrefs } from '../render/layout';
 import type { WindowPicked, ZoomPane, ZoomState } from '../workers/protocol';
 import type { AnalysisWindow } from '../patterns/window';
 import type { Outcome } from '../patterns/detect';
+import type { Forecast } from '../forecast/forecast';
 import type { LiqStats } from '../workers/liquidation.worker';
 import { armed, type Alert, type AlertHit } from '../alerts/alerts';
 
@@ -31,6 +32,8 @@ export interface EngineOptions {
   fontPx?: number;
   /** chart indicators (default: EMA 20, EMA 50, volume) */
   indicators?: IndConfig[];
+  /** research forecast horizon in candles */
+  horizon?: number;
 }
 
 export interface MainStats {
@@ -54,6 +57,8 @@ export interface Snapshot {
     window: AnalysisWindow | null; t: Float64Array; last: number; symbol: string;
     /** 24 h ticker figures from the candles (null until history arrives) */
     day: { ref: number; hi: number; lo: number; vol: number; hours: number } | null;
+    /** research forecast over the full history (null until enough closed candles) */
+    forecast: Forecast | null;
   };
   liq: LiqStats | null;
 }
@@ -101,7 +106,7 @@ export class Engine {
     this.analytics = new Worker(new URL('../workers/analytics.worker.ts', import.meta.url), { type: 'module', name: 'analytics' });
     this.render = new Worker(new URL('../workers/render.worker.ts', import.meta.url), { type: 'module', name: 'render' });
     this.liq = new Worker(new URL('../workers/liquidation.worker.ts', import.meta.url), { type: 'module', name: 'liquidations' });
-    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, t: new Float64Array(0), last: NaN, symbol: '', day: null }, liq: null };
+    this.snap = { t: 0, shared: this.shared, feeds: {}, render: null, main: this.mainStats(), patterns: { list: [], outcomes: [], computeMs: 0, candles: 0, backfill: 0, source: '', window: null, t: new Float64Array(0), last: NaN, symbol: '', day: null, forecast: null }, liq: null };
 
     const fr = { kraken: new MessageChannel(), binance: new MessageChannel() };
     const fa = { kraken: new MessageChannel(), binance: new MessageChannel() };
@@ -127,12 +132,13 @@ export class Engine {
     }
     this.analytics.postMessage({ type: 'init', renderPort: ar.port1, feedPorts: [fa.kraken.port2, fa.binance.port2] }, [ar.port1, fa.kraken.port2, fa.binance.port2]);
     if (o.indicators) this.analytics.postMessage({ type: 'indicators', list: o.indicators });
+    if (o.horizon) this.analytics.postMessage({ type: 'horizon', horizon: o.horizon });
     this.analytics.onmessage = (e) => {
       if (e.data.type === 'patterns' && e.data.venue === this.o.venue) {
         this.snap.patterns = {
           list: e.data.patterns, outcomes: e.data.outcomes, computeMs: e.data.computeMs, candles: e.data.candles, backfill: e.data.backfill ?? 0, source: e.data.source ?? '',
           window: e.data.window ?? null, t: e.data.t ?? new Float64Array(0), last: e.data.last ?? NaN, symbol: e.data.symbol ?? '',
-          day: e.data.day ?? null,
+          day: e.data.day ?? null, forecast: e.data.forecast ?? null,
         };
         this.onPatterns({ ...this.snap.patterns });
       }
@@ -286,6 +292,8 @@ export class Engine {
   }
   /** Replace the chart's indicators (computed in the analytics worker). */
   setIndicators(list: IndConfig[]): void { this.analytics.postMessage({ type: 'indicators', list }); }
+  /** Candles ahead for the research forecast. */
+  setHorizon(h: number): void { this.o.horizon = h; this.analytics.postMessage({ type: 'horizon', horizon: h }); }
   setGroup(g: number): void { this.o.group = g; this.applyFocus(); }
   setInterval(m: Interval): void { this.o.interval = m; this.analytics.postMessage({ type: 'reset' }); this.applyFocus(); }
   /** Hand each feed the armed alerts for its venue (replaces the previous set). */

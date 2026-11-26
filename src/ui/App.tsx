@@ -24,6 +24,7 @@ import {
   loadPrefs, savePrefs, defaultPrefs, loadChartPrefs, saveChartPrefs, SIDE_W, type ViewPrefs,
   loadUiPrefs, saveUiPrefs, PINNED_INTERVALS, GROUPS, groupLabel, type ThemeMode, type SideTab, type UiPrefs, type ChartPrefs,
 } from './prefs';
+import { HORIZONS, MIN_SAMPLES, hasNoEdge, withLiquidity, type Verdict } from '../forecast/forecast';
 import Icon from './Icon';
 import { useToasts, toast, dismissToast } from './toast';
 import { useLatest, useLive } from './hooks';
@@ -49,7 +50,7 @@ const zoomTips: Record<ZoomPane, [string, string]> = {
   depth: ['Wider price range', 'Narrower price range'],
   candles: ['More candles', 'Fewer candles'],
 };
-const TABS: [SideTab, string, string][] = [['signals', 'Patterns', 'shapes'], ['alerts', 'Alerts', 'bell'], ['liq', 'Liquidations', 'flame'], ['ind', 'Indicators', 'layers'], ['game', 'Game', 'trophy'], ['health', 'Health', 'pulse']];
+const TABS: [SideTab, string, string][] = [['signals', 'Patterns', 'shapes'], ['forecast', 'Forecast', 'cone'], ['alerts', 'Alerts', 'bell'], ['liq', 'Liquidations', 'flame'], ['ind', 'Indicators', 'layers'], ['game', 'Game', 'trophy'], ['health', 'Health', 'pulse']];
 const SHORTCUTS: [string[], string][] = [
   [['/', 'Ctrl K'], 'Search pairs'], [['1', '–', '6'], 'Candle size 1m, 5m, 15m, 1h, 4h, 1D'], [[',', '.'], 'Smaller / larger candle size'],
   [['V'], 'Switch venue'], [['F'], 'Fit every panel, back to live'], [['W'], 'Draw a pattern window'], [['E'], 'Explain the patterns'],
@@ -296,6 +297,70 @@ function SignalsPanel({ venue, win, selected, showChart, showCandle, onShowChart
   );
 }
 
+const VERDICT: Record<Verdict, string> = { buy: 'Buy lean', sell: 'Sell lean', wait: 'Wait' };
+const pctOf = (x: number) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : '–');
+
+/** Research forecast: top, bottom, chance of closing higher and buy / sell flags, with how it did in this history. */
+function ForecastPanel({ horizon, interval, onHorizon }: { horizon: number; interval: Interval; onHorizon: (h: number) => void }) {
+  const stats = useStats();
+  const base = stats?.patterns.forecast ?? null;
+  const liq = stats?.liq;
+  const f = useMemo(() => {
+    if (!base) return null;
+    // cluster prices are the USDT perpetual's; rescale to this chart's price
+    const scale = liq?.lastPrice && base.last ? base.last / liq.lastPrice : 1;
+    return liq && (liq.long || liq.short) && scale > 0.2 && scale < 5 ? withLiquidity(base, liq.long, liq.short, scale) : base;
+  }, [base, liq?.long?.price, liq?.long?.notional, liq?.short?.price, liq?.short?.notional, liq?.lastPrice]);
+  const span = `${horizon} × ${intervalLabel(interval)} candles`;
+  return (
+    <section className="forecast">
+      <p className="research" role="note"><b>Research only, not financial advice.</b> A statistical sketch from past candles. Markets can and do move outside it.</p>
+      <h2>Market forecast
+        <span className="seg" role="group" aria-label="Forecast horizon">
+          {HORIZONS.map((h) => <button key={h} className={cx(h === horizon && 'on')} aria-pressed={h === horizon} onClick={() => onHorizon(h)}>{h}</button>)}
+        </span>
+      </h2>
+      {!f ? <p className="empty">Needs about {MIN_SAMPLES + 60 + horizon} closed candles of history. Waiting for the backfill, or pick a shorter horizon.</p> : (
+        <>
+          <p className="dim small">Where the close may be {span} from now (last close {px(f.last)}).</p>
+          <div className={cx('verdict', f.verdict)}>
+            <span className="v">{VERDICT[f.verdict]}</span>
+            <span className="p mono">{pctOf(f.pUp)} <small>chance higher</small></span>
+          </div>
+          <div className="cards">
+            <div className="card"><span className="k">Top (90th pct.)</span><span className="v mono up">{px(f.top)}</span><span className="s mono">{signed((f.top / f.last - 1) * 100, 1)}%</span></div>
+            <div className="card"><span className="k">Bottom (10th pct.)</span><span className="v mono down">{px(f.bottom)}</span><span className="s mono">{signed((f.bottom / f.last - 1) * 100, 1)}%</span></div>
+            <div className="card"><span className="k">Median</span><span className="v mono">{px(f.mid)}</span><span className="s mono">{signed((f.mid / f.last - 1) * 100, 1)}%</span></div>
+            <div className="card"><span className="k">Up / down room</span><span className="v mono">{Number.isFinite(f.reward) ? fmt(f.reward, 2) : '∞'}<small>×</small></span><span className="s mono">top ÷ bottom</span></div>
+          </div>
+          <ul className="flags" aria-label="Flags">
+            {f.flags.map((g) => <li key={g.id} className={g.tone}>{g.label}</li>)}
+          </ul>
+          <h3>What it is built from</h3>
+          <ul className="factors">
+            {f.factors.map((k) => (
+              <li key={k.key}>
+                <span className="name">{k.label}{!k.tested && <sup title="Live only: not part of the backtest">*</sup>}</span>
+                <span className="bar" aria-hidden="true"><i className={cx(k.score > 0 ? 'bull' : 'bear')} style={{ width: `${Math.abs(k.score) * 50}%`, [k.score > 0 ? 'left' : 'right']: '50%' }} /></span>
+                <span className="note dim">{k.note}</span>
+              </li>
+            ))}
+          </ul>
+          <h3>How it did in this history</h3>
+          <dl className="mono">
+            <dt>Candles learned from</dt><dd>{int(f.backtest.samples)}</dd>
+            <dt>Closed higher (any candle)</dt><dd>{pctOf(f.backtest.baseUp)}</dd>
+            <dt>Inside the range, out of sample</dt><dd>{pctOf(f.backtest.coverage)} <span className="dim">(aim 80%)</span></dd>
+            <dt>Direction right, out of sample</dt><dd className={cx(hasNoEdge(f) ? 'warnt' : 'up')}>{pctOf(f.backtest.hitRate)} <span className="dim">of {int(f.backtest.hitSamples)}</span></dd>
+            <dt>Always guessing {f.backtest.baseUp >= 0.5 ? 'up' : 'down'}</dt><dd>{pctOf(f.backtest.naiveRate)}</dd>
+          </dl>
+          <p className="dim small">Trend (EMA 20/50), momentum (MACD), RSI 14 and Bollinger 20,2 are scored from −1 to +1 and averaged. The chance higher is how often past candles with a similar score closed higher {horizon} candles later. Top and bottom are the 10th and 90th percentile of those moves, scaled to today's volatility. Patterns and liquidation clusters (*) nudge the chance by at most a few points: they have no history to test here. Backtest: learned on the first half of the history, scored on the second. There is no buy or sell lean unless the model called direction better than always guessing the usual direction; otherwise it says so. A buy lean then needs at least 58% and more room up than down; a sell lean the reverse.</p>
+        </>
+      )}
+    </section>
+  );
+}
+
 function LiqPanel({ showLiq, onShowLiq }: { showLiq: boolean; onShowLiq: (v: boolean) => void }) {
   const stats = useStats();
   return (
@@ -417,6 +482,7 @@ export default function App() {
   const [showCandle, setShowCandle] = useState(init.chart.showCandlePatterns);
   const [indicators, setIndicatorsState] = useState<IndConfig[]>(init.chart.indicators);
   const [indMenu, setIndMenu] = useState(false);
+  const [horizon, setHorizonState] = useState(init.chart.forecastHorizon);
   // lower panes and the volume strip change the candle pane's geometry (the axis handles follow it)
   const indPanes = useMemo(() => ({
     sub: Math.min(MAX_SUB_PANES, indicators.filter((c) => c.on && SPECS[c.kind].pane === 'sub').length),
@@ -450,7 +516,7 @@ export default function App() {
 
   // ---- persistence: each takes the values just changed, the rest come from this render ----
   const persistUi = (o: Partial<UiPrefs> = {}) => saveUiPrefs({ themeMode, sideOpen, tab, ...o });
-  const persistChart = (o: Partial<ChartPrefs> = {}) => saveChartPrefs({ interval, indicators, showChartPatterns: showChart, showCandlePatterns: showCandle, showLiquidations: showLiq, ...o });
+  const persistChart = (o: Partial<ChartPrefs> = {}) => saveChartPrefs({ interval, indicators, showChartPatterns: showChart, showCandlePatterns: showCandle, showLiquidations: showLiq, forecastHorizon: horizon, ...o });
   const persist = useCallback(() => savePrefs({ layout: layoutRef.current, sideW: sideWRef.current, fontPx: fontRef.current, ...zoomRef.current } satisfies ViewPrefs), [layoutRef, sideWRef, fontRef, zoomRef]);
   function syncUrl(o: Partial<{ source: string; venue: Venue; pair: string; group: number; interval: Interval; load: number; themeMode: ThemeMode; showLiq: boolean }> = {}) {
     const s = { source, venue, pair, group, interval, load, themeMode, showLiq, ...o };
@@ -477,10 +543,11 @@ export default function App() {
   }
   function setShowChartTo(v: boolean) { setShowChart(v); engineRef.current?.setSettings({ showChartPatterns: v }); persistChart({ showChartPatterns: v }); }
   function setShowCandleTo(v: boolean) { setShowCandle(v); engineRef.current?.setSettings({ showCandlePatterns: v }); persistChart({ showCandlePatterns: v }); }
+  function setHorizon(h: number) { setHorizonState(h); engineRef.current?.setHorizon(h); persistChart({ forecastHorizon: h }); }
   function setShowLiqTo(v: boolean) { setShowLiq(v); engineRef.current?.setSettings({ showLiquidations: v }); syncUrl({ showLiq: v }); persistChart({ showLiquidations: v }); }
 
   // ---- the engine: workers, shared buffers and the canvas, started once per generation ----
-  const latest = useLatest({ source, host, load, venue, pair, catalogRef, group, interval, theme, layoutRef, fontRef, zoomRef, indicators, reducedMotion, showChart, showCandle, selected, showLiq, res });
+  const latest = useLatest({ source, host, load, venue, pair, catalogRef, group, interval, theme, layoutRef, fontRef, zoomRef, indicators, horizon, reducedMotion, showChart, showCandle, selected, showLiq, res });
   const settings = (): SceneSettings => {
     const s = latest.current;
     const z = s.zoomRef.current;
@@ -502,7 +569,7 @@ export default function App() {
       pairCount: s.load,
       depth: { kraken: s.source === 'local' ? 1000 : 500, binance: 1000 },
       venue: s.venue, pair: s.pair, catalog: s.catalogRef.current, group: s.group, interval: s.interval, settings: settings(), theme: s.theme,
-      layout: s.layoutRef.current, fontPx: s.fontRef.current, indicators: s.indicators,
+      layout: s.layoutRef.current, fontPx: s.fontRef.current, indicators: s.indicators, horizon: s.horizon,
     });
     engineRef.current = engine;
     engine.onZoom = (z) => {
@@ -1032,6 +1099,10 @@ export default function App() {
             <div className="panel" role="tabpanel" id="panel-signals" aria-labelledby="tab-signals" hidden={tab !== 'signals'}>
               <SignalsPanel venue={venue} win={win} selected={selected} showChart={showChart} showCandle={showCandle}
                 onShowChart={setShowChartTo} onShowCandle={setShowCandleTo} onClearWindow={clearWindow} onExplain={openExplanation} onSelect={selectPattern} />
+            </div>
+
+            <div className="panel" role="tabpanel" id="panel-forecast" aria-labelledby="tab-forecast" hidden={tab !== 'forecast'}>
+              <ForecastPanel horizon={horizon} interval={interval} onHorizon={setHorizon} />
             </div>
 
             <div className="panel" role="tabpanel" id="panel-liq" aria-labelledby="tab-liq" hidden={tab !== 'liq'}>
