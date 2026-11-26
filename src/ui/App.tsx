@@ -27,7 +27,7 @@ import {
   loadPrefs, savePrefs, defaultPrefs, loadChartPrefs, saveChartPrefs, SIDE_W, type ViewPrefs,
   loadUiPrefs, saveUiPrefs, PINNED_INTERVALS, GROUPS, groupLabel, type ThemeMode, type SideTab, type UiPrefs, type ChartPrefs,
 } from './prefs';
-import { HORIZONS, MIN_SAMPLES, hasNoEdge, withLiquidity, type Verdict } from '../forecast/forecast';
+import { HORIZONS, MAX_HORIZON, MIN_HORIZON, MIN_SAMPLES, clampHorizon, hasNoEdge, MIN_INDEPENDENT, withLiquidity, type Verdict } from '../forecast/forecast';
 import Icon from './Icon';
 import { useToasts, toast, dismissToast } from './toast';
 import { useLatest, useLive } from './hooks';
@@ -303,6 +303,11 @@ function SignalsPanel({ venue, win, selected, showChart, showCandle, onShowChart
 }
 
 const VERDICT: Record<Verdict, string> = { buy: 'Buy lean', sell: 'Sell lean', wait: 'Wait' };
+/** minutes as a rough span: "5 h", "3 d", "2 mo" */
+const durationOf = (min: number) => {
+  const h = min / 60, d = h / 24;
+  return min < 90 ? `${Math.round(min)} min` : h < 48 ? `${Math.round(h)} h` : d < 60 ? `${Math.round(d)} d` : d < 730 ? `${Math.round(d / 30.4)} mo` : `${(d / 365).toFixed(1)} y`;
+};
 const pctOf = (x: number) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : '–');
 
 /** Research forecast: top, bottom, chance of closing higher and buy / sell flags, with how it did in this history. */
@@ -316,15 +321,29 @@ function ForecastPanel({ horizon, interval, onHorizon }: { horizon: number; inte
     const scale = liq?.lastPrice && base.last ? base.last / liq.lastPrice : 1;
     return liq && (liq.long || liq.short) && scale > 0.2 && scale < 5 ? withLiquidity(base, liq.long, liq.short, scale) : base;
   }, [base, liq?.long?.price, liq?.long?.notional, liq?.short?.price, liq?.short?.notional, liq?.lastPrice]);
-  const span = `${horizon} × ${intervalLabel(interval)} candles`;
+  const span = `${horizon} × ${intervalLabel(interval)} candles (about ${durationOf(horizon * interval)})`;
+  const preset = (HORIZONS as readonly number[]).includes(horizon);
+  const [draft, setDraft] = useState(preset ? '' : String(horizon));
+  useEffect(() => { if (!(HORIZONS as readonly number[]).includes(horizon)) setDraft(String(horizon)); }, [horizon]);
+  const applyCustom = () => {
+    const h = clampHorizon(draft);
+    if (Number.isFinite(h)) { setDraft(String(h)); if (h !== horizon) onHorizon(h); }
+    else setDraft(preset ? '' : String(horizon));
+  };
   return (
     <section className="forecast">
       <p className="research" role="note"><b>Research only, not financial advice.</b> A statistical sketch from past candles. Markets can and do move outside it.</p>
-      <h2>Market forecast
-        <span className="seg" role="group" aria-label="Forecast horizon">
-          {HORIZONS.map((h) => <button key={h} className={cx(h === horizon && 'on')} aria-pressed={h === horizon} onClick={() => onHorizon(h)}>{h}</button>)}
+      <h2>Market forecast</h2>
+      <div className="horizon">
+        <span className="dim small">Candles ahead</span>
+        <span className="seg" role="group" aria-label="Forecast length in candles">
+          {HORIZONS.map((h) => <button key={h} className={cx(h === horizon && 'on')} aria-pressed={h === horizon} title={`${h} candles, about ${durationOf(h * interval)}`} onClick={() => { setDraft(''); onHorizon(h); }}>{h}</button>)}
         </span>
-      </h2>
+        <input className={cx('mono', !preset && 'on')} type="number" inputMode="numeric" min={MIN_HORIZON} max={MAX_HORIZON} step={1} placeholder="custom"
+          aria-label={`Custom forecast length, ${MIN_HORIZON} to ${MAX_HORIZON} candles`} title={`Any length from ${MIN_HORIZON} to ${MAX_HORIZON} candles; Enter applies`}
+          value={draft} onChange={(e) => setDraft(e.currentTarget.value)} onBlur={applyCustom}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyCustom(); } else if (e.key === 'Escape') setDraft(preset ? '' : String(horizon)); }} />
+      </div>
       {!f ? <p className="empty">Needs about {MIN_SAMPLES + 60 + horizon} closed candles of history. Waiting for the backfill, or pick a shorter horizon.</p> : (
         <>
           <p className="dim small">Where the close may be {span} from now (last close {px(f.last)}).</p>
@@ -358,8 +377,9 @@ function ForecastPanel({ horizon, interval, onHorizon }: { horizon: number; inte
             <dt>Inside the range, out of sample</dt><dd>{pctOf(f.backtest.coverage)} <span className="dim">(aim 80%)</span></dd>
             <dt>Direction right, out of sample</dt><dd className={cx(hasNoEdge(f) ? 'warnt' : 'up')}>{pctOf(f.backtest.hitRate)} <span className="dim">of {int(f.backtest.hitSamples)}</span></dd>
             <dt>Always guessing {f.backtest.baseUp >= 0.5 ? 'up' : 'down'}</dt><dd>{pctOf(f.backtest.naiveRate)}</dd>
+            <dt>Separate outcomes</dt><dd className={cx(f.backtest.independent < MIN_INDEPENDENT * 2 && 'warnt')} title="Windows checked ÷ length: overlapping windows share most of their move">{int(f.backtest.independent)}</dd>
           </dl>
-          <p className="dim small">Trend (EMA 20/50), momentum (MACD), RSI 14 and Bollinger 20,2 are scored from −1 to +1 and averaged. The chance higher is how often past candles with a similar score closed higher {horizon} candles later. Top and bottom are the 10th and 90th percentile of those moves, scaled to today's volatility. Patterns and liquidation clusters (*) nudge the chance by at most a few points: they have no history to test here. Backtest: learned on the first half of the history, scored on the second. There is no buy or sell lean unless the model called direction better than always guessing the usual direction; otherwise it says so. A buy lean then needs at least 58% and more room up than down; a sell lean the reverse.</p>
+          <p className="dim small">Trend (EMA 20/50), momentum (MACD), RSI 14 and Bollinger 20,2 are scored from −1 to +1 and averaged. The chance higher is how often past candles with a similar score closed higher {horizon} candles later. Top and bottom are the 10th and 90th percentile of those moves, scaled to today's volatility. Patterns and liquidation clusters (*) nudge the chance by at most a few points: they have no history to test here. Backtest: learned on the first half of the history, scored on the second. There is no buy or sell lean unless the model called direction better than always guessing the usual direction, over at least {MIN_INDEPENDENT} separate (non-overlapping) outcomes; otherwise it says so. Long lengths have few separate outcomes in the history, so they rarely show a lean. A buy lean then needs at least 58% and more room up than down; a sell lean the reverse.</p>
         </>
       )}
     </section>

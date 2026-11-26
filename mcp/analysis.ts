@@ -9,7 +9,8 @@ import type { PatternHit } from '../src/patterns/types';
 import { detect } from '../src/patterns/detect';
 import { detectInWindow } from '../src/patterns/window';
 import { explain, type Explanation } from '../src/patterns/explain';
-import { forecast as runForecast, hasNoEdge, withLiquidity, DEFAULT_HORIZON, type Forecast } from '../src/forecast/forecast';
+import { forecast as runForecast, hasNoEdge, withLiquidity, DEFAULT_HORIZON, clampHorizon, type Forecast } from '../src/forecast/forecast';
+import { MAX_BARS } from '../src/feeds/history';
 import { intervalMs, type Interval } from '../src/shared/config';
 import {
   autoInterval, book, candles, intervalName, liquidity, parseDate, parseInterval, parsePair, parsePeriod,
@@ -131,8 +132,9 @@ export interface ForecastInput { pair: string; interval?: string; horizon?: numb
 export async function forecast(i: ForecastInput): Promise<{ data: ForecastSummary; text: string; svg: string }> {
   const pair = parsePair(i.pair);
   const iv = parseInterval(i.interval ?? '4h');
-  const horizon = Math.max(1, Math.min(200, Math.round(i.horizon ?? DEFAULT_HORIZON)));
-  const set = await candles(pair, iv, 1500, { venue: i.venue });
+  const horizon = clampHorizon(i.horizon ?? DEFAULT_HORIZON) || DEFAULT_HORIZON;
+  // long lengths need more history: enough for warm-up, the length itself and two halves to learn and check on
+  const set = await candles(pair, iv, Math.min(MAX_BARS, Math.max(1500, 3 * horizon + 600)), { venue: i.venue });
   const cs = set.candles;
   const d = detect(cs);
   let f = runForecast(cs, { horizon, patterns: d.patterns });
