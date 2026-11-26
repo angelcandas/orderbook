@@ -8,8 +8,8 @@ export interface PatternHit {
   kind: string;
   label: string;
   bias: Bias;
-  /** multi-bar chart pattern, or single/2/3-bar candle pattern */
-  family: 'chart' | 'candle' | 'volatility';
+  /** multi-bar chart pattern, single/2/3-bar candle pattern, range signal, or indicator signal (RSI, Bollinger, MACD, volume, liquidations) */
+  family: 'chart' | 'candle' | 'volatility' | 'signal';
   start: number; // candle index
   end: number;
   /** polyline through the defining pivots */

@@ -3,7 +3,7 @@ import { Engine, type Snapshot } from './engine';
 import { focusStatusOf, gameBadgeStore, ladderStore, statsStore, useLadder, useStats } from './live';
 import { INTERVALS, LIVE, intervalLabel, isInterval, localEndpoints, type Interval, type Venue } from '../shared/config';
 import Indicators from './Indicators';
-import { MAX_SUB_PANES, SPECS, type IndConfig } from '../indicators/spec';
+import { indLabel, MAX_SUB_PANES, SPECS, type IndConfig } from '../indicators/spec';
 import {
   allPairs, builtinCatalog, loadCachedCatalog, loadFavourites, MarketIndex, quoteRanking,
   saveCachedCatalog, saveFavourites, splitLabel, toggleFavourite, type Catalog,
@@ -13,6 +13,7 @@ import type { SceneSettings } from '../render/scene';
 import type { PatternHit } from '../patterns/types';
 import type { AnalysisWindow } from '../patterns/window';
 import { explain, explanationText, type Explanation } from '../patterns/explain';
+import { indicatorsFor, needsOf } from '../patterns/needs';
 import Alerts, { type AlertsHandle } from './Alerts';
 import Game from './Game';
 import { midOf } from '../alerts/alerts';
@@ -246,7 +247,8 @@ interface SignalsProps {
 function SignalsPanel({ venue, win, selected, showChart, showCandle, onShowChart, onShowCandle, onClearWindow, onExplain, onSelect }: SignalsProps) {
   const stats = useStats();
   const chartPatterns = useMemo(() => chartPatternsOf(stats), [stats]);
-  const candlePats = useMemo(() => (stats?.patterns.list ?? []).filter((p: PatternHit) => p.family !== 'chart').slice(-12).reverse(), [stats]);
+  const candlePats = useMemo(() => (stats?.patterns.list ?? []).filter((p: PatternHit) => p.family === 'candle' || p.family === 'volatility').slice(-12).reverse(), [stats]);
+  const indSignals = useMemo(() => (stats?.patterns.list ?? []).filter((p: PatternHit) => p.family === 'signal').sort((a, b) => a.end - b.end).slice(-12).reverse(), [stats]);
   return (
     <>
       <section>
@@ -289,6 +291,18 @@ function SignalsPanel({ venue, win, selected, showChart, showCandle, onShowChart
         {candlePats.length === 0 && <p className="empty">No candle signals yet.</p>}
         <ul className="pats">
           {candlePats.map((p) => (
+            <li key={p.id} className={cx(selected === p.id && 'sel')}><button onClick={() => onSelect(p.id)} aria-pressed={selected === p.id}>
+              <span className={cx('dot', p.bias > 0 && 'bull', p.bias < 0 && 'bear')}></span>
+              <span className="name">{p.label}</span>
+            </button></li>
+          ))}
+        </ul>
+      </section>
+      <section>
+        <h2>Indicator signals</h2>
+        {indSignals.length === 0 && <p className="empty">No RSI, Bollinger, MACD, volume or liquidation signals in the recent bars.</p>}
+        <ul className="pats">
+          {indSignals.map((p) => (
             <li key={p.id} className={cx(selected === p.id && 'sel')}><button onClick={() => onSelect(p.id)} aria-pressed={selected === p.id}>
               <span className={cx('dot', p.bias > 0 && 'bull', p.bias < 0 && 'bear')}></span>
               <span className="name">{p.label}</span>
@@ -491,21 +505,31 @@ export default function App() {
   const [showCandle, setShowCandle] = useState(init.chart.showCandlePatterns);
   const [indicators, setIndicatorsState] = useState<IndConfig[]>(init.chart.indicators);
   const [indMenu, setIndMenu] = useState(false);
+  const [showLiq, setShowLiq] = useState(init.showLiq);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [explanation, setExplanation] = useState<Explanation | null>(null);
+  /** the patterns the open explanation was written from */
+  const explained = useRef<PatternHit[]>([]);
+  // a pattern being explained: the chart shows only the indicators it is computed from,
+  // and the user's own come back when it is deselected or the explanation closes
+  const focus = useMemo(() => {
+    if (!explanation || !selected) return null;
+    return explained.current.find((p) => p.id === selected) ?? (statsStore.get()?.patterns.list ?? []).find((p) => p.id === selected) ?? null;
+  }, [explanation, selected]);
+  const shownInd = useMemo(() => (focus ? indicatorsFor(focus) : indicators), [focus, indicators]);
+  const shownLiq = focus && needsOf(focus).liq ? true : showLiq;
   const [horizon, setHorizonState] = useState(init.chart.forecastHorizon);
   // lower panes and the volume strip change the candle pane's geometry (the axis handles follow it)
   const indPanes = useMemo(() => ({
-    sub: Math.min(MAX_SUB_PANES, indicators.filter((c) => c.on && SPECS[c.kind].pane === 'sub').length),
-    vol: indicators.some((c) => c.on && c.kind === 'volume'),
-  }), [indicators]);
+    sub: Math.min(MAX_SUB_PANES, shownInd.filter((c) => c.on && SPECS[c.kind].pane === 'sub').length),
+    vol: shownInd.some((c) => c.on && c.kind === 'volume'),
+  }), [shownInd]);
   const geom = (c: Rect) => candleGeom(c, indPanes.sub, indPanes.vol);
   const [reducedMotion, setReducedMotion] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [showTable, setShowTable] = useState(false);
-  const [showLiq, setShowLiq] = useState(init.showLiq);
-  const [selected, setSelected] = useState<string | null>(null);
   // analysis window: a box dragged on the candle chart; patterns are searched inside it only
   const [win, setWin] = useState<AnalysisWindow | null>(null);
   const [drawMode, setDrawMode] = useState(false);
-  const [explanation, setExplanation] = useState<Explanation | null>(null);
   const [copied, setCopied] = useState(false);
 
   // layout + zoom, remembered in this browser (refs too: drags and persistence read them back at once)
@@ -547,8 +571,7 @@ export default function App() {
   const openHealth = () => openTab('health');
   function openTab(t: SideTab) { setTab(t); setSideOpen(true); persistUi({ tab: t, sideOpen: true }); }
   function setIndicators(list: IndConfig[]) {
-    setIndicatorsState(list);
-    engineRef.current?.setIndicators(list);
+    setIndicatorsState(list); // reaches the engine through shownInd below
     persistChart({ indicators: list });
   }
   function setShowChartTo(v: boolean) { setShowChart(v); engineRef.current?.setSettings({ showChartPatterns: v }); persistChart({ showChartPatterns: v }); }
@@ -613,6 +636,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generation]);
   const restart = () => setGeneration((g) => g + 1);
+  // what the chart computes and draws: the user's indicators, or the explained pattern's
+  useEffect(() => { engineRef.current?.setIndicators(shownInd); }, [shownInd, generation]);
+  useEffect(() => { engineRef.current?.setSettings({ showLiquidations: shownLiq }); }, [shownLiq, generation]);
 
   // stage size and the low rate book read for the ticker and the text table
   useEffect(() => {
@@ -687,12 +713,17 @@ export default function App() {
   // ---- analysis window and explanation ----
   function clearWindow() { setWin(null); engineRef.current?.setWindow(null); }
   function openExplanation() {
-    const pt = statsStore.get()?.patterns ?? engineRef.current?.snapshot().patterns;
+    const pt = engineRef.current?.snapshot().patterns ?? statsStore.get()?.patterns; // the engine's is the freshest
     if (!pt) return;
     // without a window: every chart pattern and the latest candle signals, as listed in the side panel
-    const list = pt.window ? pt.list : [...pt.list.filter((p) => p.family === 'chart'), ...pt.list.filter((p) => p.family !== 'chart' && p.bias !== 0).slice(-12)];
+    const list = pt.window ? pt.list : [
+      ...pt.list.filter((p) => p.family === 'chart'),
+      ...pt.list.filter((p) => (p.family === 'candle' || p.family === 'volatility') && p.bias !== 0).slice(-12),
+      ...pt.list.filter((p) => p.family === 'signal').sort((a, b) => a.end - b.end).slice(-12),
+    ];
+    explained.current = list;
     setExplanation(explain(list, {
-      t: pt.t, last: pt.last, decimals: ladderStore.get()?.decimals ?? 2, window: pt.window,
+      t: pt.t, last: pt.last, decimals: ladderStore.get()?.decimals ?? 2, window: pt.window, study: pt.study,
       symbol: res ? `${venueName(venue)} ${res.base}/${res.quote}` : pair, interval,
     }));
     setCopied(false);
@@ -1250,8 +1281,13 @@ export default function App() {
                 <button className="ghost icon" aria-label="Close" onClick={() => setExplanation(null)}><Icon name="close" /></button>
               </div>
               <p className="summary">{explanation.summary}</p>
-              {!!explanation.items.length && <p className="dim small">Newest first. Click a pattern to highlight its markers on the chart; click it again to clear.</p>}
-              {explanation.items.map((it) => (
+              {!!explanation.items.length && <p className="dim small">Newest first. Click a pattern to highlight it on the chart; the chart then shows only the indicators it uses. Click it again or close this panel to remove them and bring yours back.</p>}
+              {focus && (
+                <p className="dim small focusind" role="status">Showing for {focus.label}: {[...shownInd.map(indLabel), ...(needsOf(focus).liq ? ['liquidation bands'] : [])].join(', ') || 'no indicators'}. Your {indicators.filter((c) => c.on).length} indicator{indicators.filter((c) => c.on).length === 1 ? ' is' : 's are'} hidden.</p>
+              )}
+              {explanation.items.map((it) => it.id === 'window-study' ? (
+                <article key={it.id} className="study"><h3>{it.heading}</h3><p>{it.text}</p></article>
+              ) : (
                 <article key={it.id} className={cx(selected === it.id && 'sel')} onClick={() => selectPattern(it.id)}>
                   <h3><button className="link" title="Highlight on the chart" aria-pressed={selected === it.id} onClick={(e) => { e.stopPropagation(); selectPattern(it.id); }}>{it.heading}</button></h3>
                   <p>{it.text}</p>

@@ -8,6 +8,7 @@ import type { AnalyticsOut } from '../patterns/types';
 import type { Venue } from '../shared/config';
 import { MAX_BARS, prepend, stepOf } from '../feeds/history';
 import { computeAll, defaultIndicators, type IndConfig } from '../indicators/spec';
+import { applyTail, type LiqData } from '../patterns/liq';
 import { DEFAULT_HORIZON, forecast, type Forecast } from '../forecast/forecast';
 
 /**
@@ -27,15 +28,17 @@ let cached: Detection | null = null;
 let win: AnalysisWindow | null = null;
 /** the indicators the chart shows; recomputed on every pass since the forming candle moves them */
 let indicators: IndConfig[] = defaultIndicators();
+/** the estimated liquidation map (Binance perpetual), for the liquidation signals */
+let liq: LiqData | null = null;
 /** candles ahead for the research forecast */
 let horizon = DEFAULT_HORIZON;
 let fc: Forecast | null = null;
 
 /** Indicators over everything, patterns over the window when one is drawn. */
 function run(candles: Candle[]): Detection {
-  if (!win) return detect(candles);
-  const inside = detectInWindow(candles, win);
-  return { series: toSeries(candles), patterns: inside?.patterns ?? [], outcomes: inside?.outcomes ?? [] };
+  if (!win) return detect(candles, { liq });
+  const inside = detectInWindow(candles, win, liq);
+  return { series: toSeries(candles), patterns: inside?.patterns ?? [], outcomes: inside?.outcomes ?? [], study: inside?.study };
 }
 
 function upsert(list: Candle[], c: Candle): void {
@@ -63,7 +66,7 @@ function compute(): void {
   if (fresh) {
     cached = d; lastClosedCount = closedCount;
     // full history, not the window: the forecast is about what comes after the last candle
-    fc = forecast(candles, { horizon, patterns: win ? detect(candles).patterns : d.patterns });
+    fc = forecast(candles, { horizon, patterns: win ? detect(candles, { liq }).patterns : d.patterns });
   }
   const n = candles.length;
   const out: AnalyticsOut = {
@@ -87,7 +90,7 @@ function compute(): void {
     postMessage({
       type: 'patterns', venue, symbol, patterns: d.patterns, outcomes: d.outcomes, computeMs: out.computeMs, candles: n,
       backfill: series[venue].backfill, source: series[venue].source,
-      window: win, t: times, last: n ? candles[n - 1].c : NaN,
+      window: win, study: d.study ?? null, t: times, last: n ? candles[n - 1].c : NaN,
       day: dayStats(candles),
       forecast: fc,
     }, [times.buffer]);
@@ -130,11 +133,24 @@ function onFeed(e: MessageEvent): void {
   }
 }
 
+function onLiq(e: MessageEvent): void {
+  const m = e.data;
+  if (m.type === 'liq') {
+    liq = { stepMs: m.stepMs, t0: m.t0, cols: m.cols, bins: m.bins, origin: m.origin, binStep: m.binStep, lastPrice: m.lastPrice, data: m.data, events: m.events };
+    cached = null; // a new map: search again
+    schedule();
+  } else if (m.type === 'liqTail') {
+    // the newest column moves every second; it is used at the next candle close
+    if (liq) applyTail(liq, m);
+  } else if (m.type === 'liqClear') liq = null;
+}
+
 self.onmessage = (e: MessageEvent) => {
   const m = e.data;
   if (m.type === 'init') {
     renderPort = m.renderPort;
     for (const p of m.feedPorts as MessagePort[]) p.onmessage = onFeed;
+    if (m.liqPort) (m.liqPort as MessagePort).onmessage = onLiq;
   } else if (m.type === 'venue') {
     venue = m.venue;
     cached = null;

@@ -1,5 +1,7 @@
 import type { PatternHit } from './types';
-import type { AnalysisWindow } from './window';
+import type { AnalysisWindow, WindowStudy } from './window';
+import { needsOf } from './needs';
+import { indLabel } from '../indicators/spec';
 
 /** What each pattern is and what it usually implies, in plain words (after docs/patterns.md and its sources). */
 const ABOUT: Record<string, string> = {
@@ -43,6 +45,27 @@ const ABOUT: Record<string, string> = {
   'inside-bar': 'This bar traded entirely inside the previous one. A pause; the break of the mother bar\'s range tends to set the next move.',
   'gap-up': 'The bar opened well above the previous close (more than half an ATR). Strong demand at the open; gaps sometimes get filled later.',
   'gap-down': 'The bar opened well below the previous close (more than half an ATR). Strong supply at the open; gaps sometimes get filled later.',
+  // indicator signals (src/patterns/signals.ts)
+  'rsi-bull-div': 'Price made a lower low but RSI made a higher low. Selling momentum is fading even though price is still falling; a common early sign of a bottom, stronger when the first low was oversold.',
+  'rsi-bear-div': 'Price made a higher high but RSI made a lower high. Buying momentum is fading even though price is still rising; a common early sign of a top, stronger when the first high was overbought.',
+  'rsi-hidden-bull-div': 'In an uptrend, price made a higher low while RSI made a lower low. The pullback was deep in momentum terms but shallow in price, which tends to mean the uptrend resumes.',
+  'rsi-hidden-bear-div': 'In a downtrend, price made a lower high while RSI made a higher high. The bounce was strong in momentum terms but weak in price, which tends to mean the downtrend resumes.',
+  'rsi-failure-swing-bull': "Wilder's failure swing: RSI dropped under 30, bounced, pulled back without going under 30 again, then rose past its bounce high. RSI turned up before price had to, a bottoming signal.",
+  'rsi-failure-swing-bear': "Wilder's failure swing: RSI rose over 70, dipped, rallied without reaching 70 again, then fell past its dip low. RSI turned down before price had to, a topping signal.",
+  'bb-squeeze-up': 'The Bollinger Bands were the narrowest in about 120 bars (a squeeze, meaning unusually low volatility), and then price closed above the upper band. Volatility expansions after a squeeze often run in the breakout direction; a close back under the middle band undoes it.',
+  'bb-squeeze-down': 'The Bollinger Bands were the narrowest in about 120 bars (a squeeze), and then price closed below the lower band. Volatility expansions after a squeeze often run in the breakout direction; a close back over the middle band undoes it.',
+  'bb-w-bottom': "John Bollinger's W bottom: a first low outside the lower band, a second low at about the same price that stays inside the band, then a close above the middle band. Weaker selling on the retest; bullish.",
+  'bb-m-top': "John Bollinger's M top: a first high outside the upper band, a second high at about the same price that stays inside the band, then a close below the middle band. Weaker buying on the retest; bearish.",
+  'bb-rsi-oversold': 'A close below the lower Bollinger Band with RSI under 30, then an up bar closing back inside the band. Price was stretched and sellers ran out; a mean-reversion setup toward the middle band.',
+  'bb-rsi-overbought': 'A close above the upper Bollinger Band with RSI over 70, then a down bar closing back inside the band. Price was stretched and buyers ran out; a mean-reversion setup toward the middle band.',
+  'macd-bull-div': 'Price made a lower low below zero on MACD, but the MACD line made a higher low. Downward momentum is slowing; often precedes a turn up.',
+  'macd-bear-div': 'Price made a higher high above zero on MACD, but the MACD line made a lower high. Upward momentum is slowing; often precedes a turn down.',
+  'selling-climax': 'After a steep decline, a wide bar on at least three times the usual volume that closed in its upper half. Panic selling met large buyers; such climaxes often mark the low of a move, at least for a while.',
+  'buying-climax': 'After a steep rally, a wide bar on at least three times the usual volume that closed in its lower half. Euphoric buying met large sellers; such climaxes often mark the high of a move, at least for a while.',
+  'long-flush': 'A wide down move that ran through a heavy band of estimated long liquidations (at least three times the recent norm), and the bar closed well off its low. Forced selling is done for now and the overhang is cleared; bounces often follow.',
+  'short-squeeze': 'A wide up move that ran through a heavy band of estimated short liquidations (at least three times the recent norm), and the bar closed well off its high. Forced buying is exhausted; once the squeeze ends price often gives some back.',
+  'liq-sweep-low': 'The wick dipped into the heaviest band of estimated long liquidations below price and the bar closed back above it. Stops and liquidations were taken out (a liquidity grab) and then the market reversed; bullish while the wick low holds.',
+  'liq-sweep-high': 'The wick rose into the heaviest band of estimated short liquidations above price and the bar closed back below it. Stops and liquidations were taken out (a liquidity grab) and then the market reversed; bearish while the wick high holds.',
 };
 
 export interface ExplainContext {
@@ -55,6 +78,8 @@ export interface ExplainContext {
   symbol: string;
   /** candle length in minutes */
   interval: number;
+  /** the closer look at the window, when one is drawn */
+  study?: WindowStudy | null;
 }
 
 export interface Explanation { title: string; summary: string; items: { id: string; heading: string; text: string }[] }
@@ -99,7 +124,7 @@ export function explain(ps: PatternHit[], c: ExplainContext): Explanation {
       if (p.stop !== undefined) parts.push(`A protective stop would sit at ${price(p.stop, dp)}.`);
       parts.push(`Geometric fit: ${Math.round(p.score * 100)}%.`);
     } else if (p.stop !== undefined) {
-      parts.push(`The pattern is invalidated beyond ${price(p.stop, dp)}.`);
+      parts.push(`The ${p.family === 'signal' ? 'signal' : 'pattern'} is invalidated beyond ${price(p.stop, dp)}.`);
     }
     const OUT: Record<string, string> = {
       hit: 'Since the breakout, price has reached the target.',
@@ -110,8 +135,12 @@ export function explain(ps: PatternHit[], c: ExplainContext): Explanation {
       const o = /^outcome: (\w+)$/.exec(n);
       parts.push(o ? OUT[o[1]] ?? '' : `Note: ${n}.`);
     }
+    const need = needsOf(p);
+    const shown = [...need.indicators.map((x) => indLabel({ id: '', kind: x.kind, params: x.params, color: 0, on: true })), ...(need.liq ? ['liquidation bands'] : [])];
+    parts.push(shown.length ? `Selecting it shows only ${shown.join(', ')} on the chart. ${need.why}` : `Selecting it hides the indicators: ${need.why[0].toLowerCase()}${need.why.slice(1)}`);
     return { id: p.id, heading: `${p.label} (${biasWord(p.bias)}), ${span}`, text: parts.join(' ') };
   });
+  if (c.window && c.study) items.unshift({ id: 'window-study', heading: 'Inside the window', text: studyText(c.study, dp) });
 
   const where = c.window
     ? `inside the window ${when(Math.min(c.window.t0, c.window.t1))} to ${when(Math.max(c.window.t0, c.window.t1))}, between ${price(Math.min(c.window.p0, c.window.p1), dp)} and ${price(Math.max(c.window.p0, c.window.p1), dp)}`
@@ -135,6 +164,37 @@ export function explain(ps: PatternHit[], c: ExplainContext): Explanation {
   summary += ' These are mechanical detections, not advice.';
   const iv = c.interval === 10080 ? '1W' : c.interval === 43200 ? '1M' : c.interval >= 1440 ? `${c.interval / 1440}d` : c.interval >= 60 ? `${c.interval / 60}h` : `${c.interval}m`;
   return { title: `${c.symbol} ${iv} patterns`, summary, items };
+}
+
+/** A paragraph on the window itself: trend, volatility, volume, momentum and levels. */
+export function studyText(w: WindowStudy, dp: number): string {
+  const parts: string[] = [];
+  const dir = w.slopeAtr > 0.05 ? 'up' : w.slopeAtr < -0.05 ? 'down' : 'sideways';
+  const fit = w.r2 >= 0.7 ? 'a steady' : w.r2 >= 0.35 ? 'an uneven' : 'a choppy';
+  parts.push(`${w.bars} bars, ${w.changePct >= 0 ? '+' : ''}${w.changePct.toFixed(2)}% from first open to last close, between ${price(w.low, dp)} and ${price(w.high, dp)}.`);
+  parts.push(dir === 'sideways'
+    ? `Price moved sideways (${fit} range, fit of a straight line ${Math.round(w.r2 * 100)}%).`
+    : `Price trended ${dir} at ${Math.abs(w.slopeAtr).toFixed(2)} ATR per bar in ${fit} line (fit ${Math.round(w.r2 * 100)}%).`);
+  if (isFinite(w.volRatio)) parts.push(`Bars were ${w.volRatio >= 1.15 ? `${w.volRatio.toFixed(1)}x wider` : w.volRatio <= 0.87 ? `${(1 / w.volRatio).toFixed(1)}x narrower` : 'about as wide'} than in the same stretch before the window${isFinite(w.volumeRatio) && w.volumeRatio > 0 ? `, on ${w.volumeRatio.toFixed(1)}x the volume` : ''}.`);
+  if (isFinite(w.rsiStart) && isFinite(w.rsiEnd)) {
+    const zone = (r: number) => (r >= 70 ? ' (overbought)' : r <= 30 ? ' (oversold)' : '');
+    parts.push(`RSI 14 went from ${w.rsiStart.toFixed(0)}${zone(w.rsiStart)} to ${w.rsiEnd.toFixed(0)}${zone(w.rsiEnd)}.`);
+  }
+  if (isFinite(w.bandWidthRatio)) {
+    parts.push(w.bandWidthRatio <= 0.7 ? 'The Bollinger Bands are tighter at the end than on average in the window: volatility is contracting, which often comes before a larger move.'
+      : w.bandWidthRatio >= 1.4 ? 'The Bollinger Bands are wider at the end than on average in the window: volatility is expanding.' : '');
+  }
+  if (w.levels.length) parts.push(`Levels touched more than once: ${w.levels.map((l) => `${price(l.price, dp)} (${l.kind}, ${l.touches} touches)`).join(', ')}.`);
+  if (w.liqBelow || w.liqAbove) {
+    const f = (x: { price: number; notional: number }) => `${price(x.price, dp)} (about ${compact(x.notional)} estimated)`;
+    parts.push(`Heaviest estimated liquidation bands at the window's end: ${[w.liqBelow && `longs below at ${f(w.liqBelow)}`, w.liqAbove && `shorts above at ${f(w.liqAbove)}`].filter(Boolean).join(', ')}. Price is often drawn toward large bands.`);
+  }
+  parts.push(`Searched with three swing sizes (2, 1.5 and 1 ATR): ${w.counts.chart} chart pattern${w.counts.chart === 1 ? '' : 's'}, ${w.counts.candle} candle signal${w.counts.candle === 1 ? '' : 's'} and ${w.counts.signal} indicator signal${w.counts.signal === 1 ? '' : 's'}.`);
+  return parts.filter(Boolean).join(' ');
+}
+
+function compact(x: number): string {
+  return x >= 1e9 ? `${(x / 1e9).toFixed(1)}B` : x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${(x / 1e3).toFixed(0)}k` : x.toFixed(0);
 }
 
 /** Plain text, for copying. */

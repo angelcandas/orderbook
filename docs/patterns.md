@@ -129,3 +129,60 @@ distance from the last price, the stop, and how it played out since
 bars, NR4 / NR7) are counted in the summary rather than listed. Without a window
 it covers the chart patterns and the latest twelve directional candle signals.
 The text is generated locally from fixed templates, not by a language model.
+
+### A closer look inside the window
+
+Inside a drawn window the search goes deeper than on the full chart
+(`detectInWindow` passes `fine: true` to `detect`):
+
+- chart patterns are searched on three swing sizes, zigzag pivots of 2, 1.5 and
+  1 ATR, with the minimum heights of tops, bottoms and cups scaled to match.
+  Smaller-swing finds that repeat a larger one of the same kind are dropped; the
+  rest are marked "smaller swings (N ATR pivots)";
+- candle patterns and indicator signals are kept for every bar of the window,
+  not only the latest 150;
+- the window itself is studied (`study()`): bars and change, the trend slope in
+  ATR per bar and how straight it is (R squared), bar width and volume against
+  the same stretch before the window, RSI at both ends, whether the Bollinger
+  Bands are tightening, price levels touched by two or more 1 ATR swings, and the
+  heaviest estimated liquidation bands either side at the window's end. This is
+  the first paragraph of the explanation, "Inside the window".
+
+### Indicators while a pattern is explained
+
+Clicking a pattern or signal in the explanation highlights it and swaps the
+chart's indicators for the ones it is computed from (`src/patterns/needs.ts`),
+with the detector's own parameters: RSI 14 for RSI signals, Bollinger 20 / 2,
+MACD 12 / 26 / 9, volume with its 20-bar average, ATR 14 for chart and candle
+patterns (they are sized in ATR), nothing for NR4 / NR7 / inside bars, and the
+liquidation bands for the liquidation signals. The user's own indicators are not
+changed or saved over: deselecting the pattern or closing the explanation
+removes the pattern's indicators and brings them back.
+
+## Indicator signals
+
+Twenty setups in `src/patterns/signals.ts` (family `signal`, listed under
+*Indicator signals* in the side panel and drawn as markers, with their swing
+lines when they have them). Thresholds are ours unless noted; the tests in
+`test/signals.test.ts` pin them.
+
+| Signal | Inputs | Rule |
+|---|---|---|
+| RSI bullish / bearish divergence | RSI 14, 1.5 ATR swings | consecutive swing lows (highs) 5 to 80 bars apart; price lower low (higher high), RSI higher low (lower high) by 3+ points; first RSI under 40 (over 60) |
+| RSI hidden bullish / bearish divergence | RSI 14, EMA 50 | higher low with a lower RSI low above EMA 50 (mirror below) |
+| RSI failure swing, bottom / top (Wilder) | RSI 14 | RSI under 30, bounce, pullback that stays over 30, then RSI clears the bounce high within 30 bars (mirror at 70) |
+| Squeeze breakout up / down | Bollinger 20 / 2 | band width within 5% of its 120-bar low in the last 10 bars, then the first close outside a band |
+| Bollinger W bottom / M top (Bollinger) | Bollinger 20 / 2 | first swing outside the band, retest at about the same price inside it, close past the middle band within 20 bars |
+| BB + RSI oversold / overbought reversal | Bollinger 20 / 2, RSI 14 | close outside the band with RSI under 30 (over 70), next bar closes back inside in the opposite colour |
+| MACD bullish / bearish divergence | MACD 12 / 26 / 9 | lower low (higher high) in price, MACD line higher (lower) by 0.1 ATR, first one below (above) zero |
+| Selling / buying climax | volume SMA 20, ATR 14 | volume 3x average on a bar 1.5x the average range after a 3 ATR move over 10 bars, closing in the half opposite the move |
+| Long liquidation flush / short squeeze exhaustion | liquidation map | estimated liquidations traded through by the bar 3x their 50-bar mean, bar 1.3x the average range, closing 40% off its extreme |
+| Liquidity sweep below / above | liquidation map | the wick enters the heaviest band within 8% of the open (2x the average band) and the bar closes back on the near side with a 30% wick |
+
+Liquidation signals read the estimated map the chart draws as bands
+(`src/patterns/liq.ts`): the liquidation worker sends a copy of each frame and
+tail to the analytics worker, which reduces each column to the notional the bar
+traded through (longs below the prior close, shorts above) plus Binance's
+actual liquidation prints, and the heaviest band either side of the open. They
+are estimates; without the map (futures data unreachable) these signals stay
+silent.
