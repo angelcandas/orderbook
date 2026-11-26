@@ -46,6 +46,10 @@ venue has no exact listing, USD, USDT and USDC stand in for each other and the
 panel says so; otherwise the book shows "not listed". Switching pair
 resubscribes only the books that change on the open sockets, with no reconnect.
 
+## Ask Claude (MCP)
+
+`npm run mcp` starts an MCP server that lets Claude answer questions about the market with the app's own analysis: status, research forecasts, and candle charts (as images) for the last day, week, month or year, or with patterns marked between two dates. Set up for Claude Desktop, Claude Code and claude.ai in [docs/mcp.md](docs/mcp.md).
+
 ## Deploy
 
 Pushes to `main` build the app and deploy it to Cloudflare Pages (project

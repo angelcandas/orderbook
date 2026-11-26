@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": false,
     "types": ["node", "vite/client"]
   },
-  "include": ["src", "server", "test", "bench"]
+  "include": ["src", "server", "test", "bench", "mcp"]
 }
