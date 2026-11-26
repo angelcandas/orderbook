@@ -82,7 +82,13 @@ async function main() {
     const t = document.querySelector('#panel-forecast')!.textContent ?? '';
     return /Top/.test(t) && /Bottom/.test(t) && /\d+% chance higher/.test(t);
   }), await page.textContent('#panel-forecast'));
-  await page.click('#panel-forecast .seg button:has-text("50")');
+  await page.click('#panel-forecast .seg button:text-is("100")');
+  check('forecast horizon switches to 100', (await page.textContent('#panel-forecast .seg button.on')) === '100');
+  await page.fill('#panel-forecast .horizon input', '150');
+  await page.press('#panel-forecast .horizon input', 'Enter');
+  check('custom forecast length applies', await page.waitForFunction(() => /150 × /.test(document.querySelector('#panel-forecast')?.textContent ?? ''), null, { timeout: 10_000 }).then(() => true, () => false)
+    && (await page.locator('#panel-forecast .seg button.on').count()) === 0, await page.textContent('#panel-forecast'));
+  await page.click('#panel-forecast .seg button:text-is("50")');
   check('forecast horizon switches', (await page.textContent('#panel-forecast .seg button.on')) === '50');
   await page.click('#tab-ind'); // the reload check below expects the Indicators tab
 

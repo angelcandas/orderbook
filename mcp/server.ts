@@ -12,6 +12,7 @@
  */
 // every date in replies and charts is UTC, whatever the computer's zone
 process.env.TZ = 'UTC';
+import { HORIZONS, MAX_HORIZON, MIN_HORIZON } from '../src/forecast/forecast';
 import { createServer } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -118,7 +119,7 @@ export function build(): McpServer {
     inputSchema: {
       pair, venue, theme,
       interval: z.string().optional().describe('Candle size the forecast runs on. Default 4h.'),
-      horizon: z.number().int().min(1).max(200).optional().describe('Candles ahead. Default 20 (the app offers 10, 20, 50).'),
+      horizon: z.number().int().min(MIN_HORIZON).max(MAX_HORIZON).optional().describe(`Candles ahead, ${MIN_HORIZON} to ${MAX_HORIZON}. Default 20. The app's presets are ${HORIZONS.join(', ')}; any other whole number works too. Long lengths need more history (fetched automatically, up to 4000 candles) and rarely show a lean.`),
       liquidations: z.boolean().optional().describe('Let estimated liquidation clusters nudge the forecast, as the app does. Default true.'),
     },
     annotations: { readOnlyHint: true, openWorldHint: true },

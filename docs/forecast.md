@@ -6,7 +6,9 @@ the history it is shown and says when it has no edge.
 
 ## What it shows
 
-For a horizon of 10, 20 or 50 candles of the chart's current size:
+For a length of 5, 10, 20, 50, 100 or 200 candles of the chart's current size, or
+any custom whole number from 1 to 1000 (type it in the box and press Enter; the
+MCP `forecast` tool takes the same range):
 
 | Output | How it is made |
 | --- | --- |
@@ -47,7 +49,7 @@ Learn on the first half of the history, score the second half:
   direction.
 
 There is **no buy or sell lean** unless the model beat always guessing by at least
-2 points over at least 100 candles. Then a buy lean needs a chance of 58% or more
+2 points over at least 100 candles and at least 5 separate (non-overlapping) outcomes. Then a buy lean needs a chance of 58% or more
 and more room up than down; a sell lean needs 42% or less and more room down.
 "Strong" means 65% / 35%.
 
@@ -56,4 +58,8 @@ and more room up than down; a sell lean needs 42% or less and more room down.
 - One market's own history. Regimes change; past rates are not future rates.
 - Candles only: no order flow, funding, news or cross-market data.
 - The liquidation map itself is an estimate (see the Liquidations tab).
-- Up to ~3000 candles; at 1W or 1M there may not be enough history and the panel says so.
+- Up to 4000 candles; at 1W or 1M, or for long lengths, there may not be enough
+  history and the panel says so.
+- Long lengths overlap: a 200-candle forecast checked on 1400 candles has only 7
+  separate outcomes. The panel shows "separate outcomes" (windows checked ÷ length)
+  and gives no lean below 5; under 10 it flags "Few separate outcomes".

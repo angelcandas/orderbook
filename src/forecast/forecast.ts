@@ -73,12 +73,25 @@ export interface Forecast {
     /** out of sample: the same for always calling the first half's majority direction; the model has an edge only if it beats this */
     naiveRate: number;
     hitSamples: number;
+    /** hitSamples / horizon: overlapping windows share most of their moves, so this is the real number of separate outcomes */
+    independent: number;
   };
 }
 
 export interface Extra { squeeze?: boolean; rsi?: number; pb?: number }
 
-export const HORIZONS = [10, 20, 50] as const;
+/** preset lengths: a short swing to a long trend (the chart holds up to 4000 candles) */
+export const HORIZONS = [5, 10, 20, 50, 100, 200] as const;
+/** a custom length is clamped to this range */
+export const MIN_HORIZON = 1;
+export const MAX_HORIZON = 1000;
+/** A custom length as a whole number of candles within range; NaN when not a number. */
+export function clampHorizon(x: unknown): number {
+  const v = typeof x === 'string' ? (x.trim() ? Number(x.trim()) : NaN) : typeof x === 'number' ? x : NaN;
+  return Number.isFinite(v) ? Math.max(MIN_HORIZON, Math.min(MAX_HORIZON, Math.round(v))) : NaN;
+}
+/** non-overlapping windows the out-of-sample check needs before a lean is shown */
+export const MIN_INDEPENDENT = 5;
 export const DEFAULT_HORIZON = 20;
 /** below this many usable past candles the forecast is not given */
 export const MIN_SAMPLES = 120;
@@ -214,7 +227,7 @@ export interface ForecastOptions { horizon?: number; patterns?: PatternHit[] }
 
 /** The forecast from closed candles only; null until there is enough history. */
 export function forecast(candles: Candle[], o: ForecastOptions = {}): Forecast | null {
-  const horizon = o.horizon ?? DEFAULT_HORIZON;
+  const horizon = clampHorizon(o.horizon ?? DEFAULT_HORIZON) || DEFAULT_HORIZON;
   let n = candles.length;
   if (n && !candles[n - 1].closed) n--;
   if (n - WARMUP - horizon < MIN_SAMPLES) return null;
@@ -250,7 +263,7 @@ export function forecast(candles: Candle[], o: ForecastOptions = {}): Forecast |
     horizon, last, t: candles[i].t,
     top: Math.exp(hi), bottom: Math.exp(lo), mid: Math.exp(Math.log(last) + L.zMid * sd + tilt),
     pUp, pBase: pUp, score, verdict: 'wait', reward: NaN, factors, flags: [], extra: {},
-    backtest: { samples: L.samples, baseUp: L.baseUp, coverage: v.coverage, hitRate: v.hitRate, naiveRate: v.naiveRate, hitSamples: v.hitSamples },
+    backtest: { samples: L.samples, baseUp: L.baseUp, coverage: v.coverage, hitRate: v.hitRate, naiveRate: v.naiveRate, hitSamples: v.hitSamples, independent: v.hitSamples / horizon },
   };
   // a squeeze: bands narrower than 80% of the last 120 candles
   let narrower = 0, seen = 0;
@@ -261,10 +274,14 @@ export function forecast(candles: Candle[], o: ForecastOptions = {}): Forecast |
 }
 
 
-/** Out of sample the model must beat always calling the majority direction by 2 points, over at least 100 candles. */
+/**
+ * Out of sample the model must beat always calling the majority direction by 2
+ * points, over at least 100 candles and MIN_INDEPENDENT non-overlapping windows
+ * (a 200-candle forecast checked on 1000 candles has only 5 separate outcomes).
+ */
 export function hasNoEdge(f: Forecast): boolean {
   const b = f.backtest;
-  return !(b.hitRate - b.naiveRate >= 0.02) || b.hitSamples < 100;
+  return !(b.hitRate - b.naiveRate >= 0.02) || b.hitSamples < 100 || !(b.independent >= MIN_INDEPENDENT);
 }
 
 /** Verdict, reward/risk and flags from the current numbers. Run again after `withLiquidity`. */
@@ -283,6 +300,7 @@ function finish(f: Forecast): Forecast {
   if ((x.rsi ?? 50) < 30) flags.push({ id: 'oversold', label: 'Oversold', tone: 'warn' });
   if ((x.pb ?? 0.5) > 1 || (x.pb ?? 0.5) < 0) flags.push({ id: 'outside', label: 'Outside Bollinger', tone: 'warn' });
   if (x.squeeze) flags.push({ id: 'squeeze', label: 'Volatility squeeze', tone: 'warn' });
+  if (f.backtest.independent < MIN_INDEPENDENT * 2) flags.push({ id: 'few', label: 'Few separate outcomes', tone: 'warn' });
   const liq = f.factors.find((k) => k.key === 'liquidity');
   if (liq && Math.abs(liq.score) > 0.2) flags.push({ id: 'liq', label: liq.score > 0 ? 'Short liquidations above' : 'Long liquidations below', tone: liq.score > 0 ? 'bull' : 'bear' });
   f.flags = flags;

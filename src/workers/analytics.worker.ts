@@ -9,7 +9,7 @@ import type { Venue } from '../shared/config';
 import { MAX_BARS, prepend, stepOf } from '../feeds/history';
 import { computeAll, defaultIndicators, type IndConfig } from '../indicators/spec';
 import { applyTail, type LiqData } from '../patterns/liq';
-import { DEFAULT_HORIZON, forecast, type Forecast } from '../forecast/forecast';
+import { DEFAULT_HORIZON, clampHorizon, forecast, type Forecast } from '../forecast/forecast';
 
 /**
  * Candles in, indicators and patterns out. Runs off the render and feed threads;
@@ -163,7 +163,7 @@ self.onmessage = (e: MessageEvent) => {
     if (timer) clearTimeout(timer);
     compute();
   } else if (m.type === 'horizon') {
-    horizon = m.horizon;
+    horizon = clampHorizon(m.horizon) || DEFAULT_HORIZON;
     cached = null;
     schedule();
   } else if (m.type === 'window') {

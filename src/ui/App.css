@@ -140,7 +140,10 @@
   /* research forecast */
   .shell .forecast .research:where(:not(.scope, .scope *)) { margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: var(--hover); border-left: 3px solid var(--warn); font-size: 12px; color: var(--dim); }
   .shell .forecast .research b:where(:not(.scope, .scope *)) { color: var(--text); }
-  .shell .forecast .seg:where(:not(.scope, .scope *)) { display: inline-flex; gap: 2px; margin-left: auto; text-transform: none; letter-spacing: 0; }
+  .shell .forecast .horizon:where(:not(.scope, .scope *)) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
+  .shell .forecast .seg:where(:not(.scope, .scope *)) { display: inline-flex; flex-wrap: wrap; gap: 2px; text-transform: none; letter-spacing: 0; background: none; border: 0; padding: 0; }
+  .shell .forecast .horizon input:where(:not(.scope, .scope *)) { width: 72px; font-size: 11px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--text); }
+  .shell .forecast .horizon input.on:where(:not(.scope, .scope *)) { border-color: var(--accent); background: var(--accent-soft); }
   .shell .forecast .seg button:where(:not(.scope, .scope *)) { border: 1px solid var(--line); background: transparent; color: var(--dim); font: 11px var(--mono); padding: 1px 7px; border-radius: 5px; }
   .shell .forecast .seg button.on:where(:not(.scope, .scope *)) { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
   .shell .forecast .verdict:where(:not(.scope, .scope *)) { display: flex; align-items: baseline; justify-content: space-between; margin: 10px 0 4px; padding: 10px 12px; border-radius: 8px; background: var(--hover); }

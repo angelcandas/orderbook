@@ -1,4 +1,4 @@
-import { DEFAULT_HORIZON, HORIZONS } from '../forecast/forecast';
+import { DEFAULT_HORIZON, clampHorizon } from '../forecast/forecast';
 import { normalizeLayout, ZOOM, type LayoutPrefs } from '../render/layout';
 import { isInterval, type Interval } from '../shared/config';
 import { normalizeIndicators, type IndConfig } from '../indicators/spec';
@@ -73,7 +73,7 @@ export function normalizeChartPrefs(p: any): ChartPrefs {
     showChartPatterns: bool(p?.showChartPatterns, true),
     showCandlePatterns: bool(p?.showCandlePatterns, true),
     showLiquidations: bool(p?.showLiquidations, true),
-    forecastHorizon: (HORIZONS as readonly number[]).includes(p?.forecastHorizon) ? p.forecastHorizon : DEFAULT_HORIZON,
+    forecastHorizon: typeof p?.forecastHorizon === 'number' ? clampHorizon(p.forecastHorizon) || DEFAULT_HORIZON : DEFAULT_HORIZON,
   };
 }
 

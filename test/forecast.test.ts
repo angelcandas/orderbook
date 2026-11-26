@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { forecast, withLiquidity, readings, hasNoEdge, MIN_SAMPLES } from '../src/forecast/forecast';
+import { forecast, withLiquidity, readings, hasNoEdge, clampHorizon, MIN_SAMPLES, MAX_HORIZON, MIN_INDEPENDENT } from '../src/forecast/forecast';
 import type { Candle } from '../src/patterns/candle';
 import { synthHistory } from '../server/sim';
 
@@ -58,6 +58,39 @@ describe('research forecast', () => {
     const cs = walk(2000, 0, 0.01, 9);
     const a = forecast(cs, { horizon: 10 })!, b = forecast(cs, { horizon: 50 })!;
     expect(b.top / b.bottom).toBeGreaterThan(a.top / a.bottom);
+  });
+
+  it('takes 100 and 200 candle lengths and custom ones', () => {
+    const cs = walk(4000, 0, 0.01, 12);
+    let prev = 0;
+    for (const h of [7, 100, 200, 333]) {
+      const f = forecast(cs, { horizon: h })!;
+      expect(f.horizon).toBe(h);
+      expect(f.bottom).toBeLessThan(f.last);
+      expect(f.top).toBeGreaterThan(f.last);
+      const w = Math.log(f.top / f.bottom);
+      expect(w).toBeGreaterThan(prev);
+      prev = w;
+      expect(f.backtest.independent).toBeCloseTo(f.backtest.hitSamples / h);
+    }
+  });
+
+  it('long lengths with few separate outcomes never lean', () => {
+    // 1500 candles at 200 ahead: well under MIN_INDEPENDENT separate windows out of sample
+    const f = forecast(walk(1500, 0.002, 0.01, 3), { horizon: 200 })!;
+    expect(f.backtest.independent).toBeLessThan(MIN_INDEPENDENT);
+    expect(hasNoEdge(f)).toBe(true);
+    expect(f.verdict).toBe('wait');
+    expect(f.flags.map((g) => g.id)).toContain('few');
+  });
+
+  it('clamps custom lengths', () => {
+    expect(clampHorizon('150')).toBe(150);
+    expect(clampHorizon(12.6)).toBe(13);
+    expect(clampHorizon(0)).toBe(1);
+    expect(clampHorizon(99999)).toBe(MAX_HORIZON);
+    expect(clampHorizon('abc')).toBeNaN();
+    expect(clampHorizon('')).toBeNaN();
   });
 
   it('ignores the forming candle', () => {

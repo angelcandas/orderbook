@@ -139,6 +139,10 @@ describe('mcp server', () => {
     expect(fc.isError).toBeFalsy();
     expect(fc.structuredContent.horizon).toBe(10);
     expect(fc.structuredContent.bottom).toBeLessThan(fc.structuredContent.top);
+
+    const long: any = await c.callTool({ name: 'forecast', arguments: { pair: 'BTC', interval: '1h', horizon: 150 } });
+    expect(long.isError).toBeFalsy();
+    expect(long.structuredContent.horizon).toBe(150);
   }, 30_000);
 
   it('turns bad input into a readable error', async () => {
